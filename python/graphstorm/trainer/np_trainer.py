@@ -327,7 +327,7 @@ class GSgnnNodePredictionTrainer(GSgnnTrainer):
         val_score: dict
             Validation scores of differnet metrics in the format of {metric: val_score}.
         """
-        logging.error(f"RETURN PROBA={return_proba}")
+        logging.warning("return_proba=True hardcoded for our use case. in .trainer/np_trainer.py")
         teval = time.time()
         sys_tracker.check('before prediction')
 
