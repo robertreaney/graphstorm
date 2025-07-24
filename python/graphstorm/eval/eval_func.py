@@ -23,7 +23,7 @@ from functools import partial
 
 import numpy as np
 import torch as th
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, log_loss
 from sklearn.metrics import (precision_recall_curve,
                              auc,
                              classification_report,
@@ -35,7 +35,7 @@ SUPPORTED_RECALL_AT_PRECISION_METRICS = 'recall_at_precision'
 SUPPORTED_PRECISION_AT_RECALL_METRICS = 'precision_at_recall'
 SUPPORTED_FSCORE_AT_METRICS = 'fscore_at'
 SUPPORTED_HIT_AT_METRICS = 'hit_at'
-SUPPORTED_CLASSIFICATION_METRICS = {'accuracy', 'precision_recall', \
+SUPPORTED_CLASSIFICATION_METRICS = {'loss', 'accuracy', 'precision_recall', \
     'roc_auc', 'f1_score', 'per_class_f1_score', 'per_class_roc_auc', 'precision', 'recall', \
     SUPPORTED_HIT_AT_METRICS, SUPPORTED_FSCORE_AT_METRICS, \
     SUPPORTED_RECALL_AT_PRECISION_METRICS, SUPPORTED_PRECISION_AT_RECALL_METRICS}
@@ -68,6 +68,7 @@ class ClassificationMetrics:
         self.metric_comparator["per_class_roc_auc"] = comparator_per_class_roc_auc
         self.metric_comparator["precision"] = operator.le
         self.metric_comparator["recall"] = operator.le
+        self.metric_comparator["loss"] = operator.le
 
         # This is the operator used to measure each metric performance in training
         self.metric_function = {}
@@ -79,6 +80,7 @@ class ClassificationMetrics:
         self.metric_function["per_class_roc_auc"] = compute_roc_auc
         self.metric_function["precision"] = compute_precision
         self.metric_function["recall"] = compute_recall
+        self.metric_function["loss"] = compute_loss
 
         # This is the operator used to measure each metric performance in evaluation
         self.metric_eval_function = {}
@@ -90,6 +92,7 @@ class ClassificationMetrics:
         self.metric_eval_function["per_class_roc_auc"] = compute_per_class_roc_auc
         self.metric_eval_function["precision"] = compute_precision
         self.metric_eval_function["recall"] = compute_recall
+        self.metric_eval_function["loss"] = compute_loss
 
         for eval_metric in eval_metric_list:
             if eval_metric.startswith(SUPPORTED_HIT_AT_METRICS):
@@ -1094,3 +1097,47 @@ def compute_amri(ranking: th.Tensor, candidate_sizes: th.Tensor) -> th.Tensor:
         denominator = th.sum(candidate_sizes)
 
     return 1 - th.div(nominator, denominator)
+
+
+def compute_loss(y_preds, y_targets, mask=None):
+    """ compute log_loss score with optional masking
+        If any errors occur, raise the error to callers and stop.
+
+        Parameters
+        ----------
+        y_preds : Target scores in 2D tensor.
+                  Array-like of shape (n_samples, n_classes) with logits.
+        y_targets: Array-like of shape (n_samples,) or (n_samples, n_classes) True labels or
+                   binary label indicators. The binary and multiclass cases expect labels with
+                   shape (n_samples,) while the multilabel case expects binary label indicators
+                   with shape (n_samples, n_classes).
+        mask: Mask in the shape of y_preds to mask out unlabeled predictions
+        Returns
+        -------
+        float: The roc_auc score.
+    """
+    mask = (y_targets != 0)
+
+    y_true = th.where(y_targets == -1, 0, y_targets)
+
+    loss_score = th.nn.functional.binary_cross_entropy_with_logits(y_preds[mask], y_true[mask].to(dtype=y_preds.dtype)).item()
+
+    # y_true = y_true.cpu().numpy()
+    # # y_true = y_targets.cpu().numpy()
+    # y_pred = y_preds.cpu().numpy()
+
+    # if mask is not None:
+    #     mask = mask.cpu().numpy()
+    #     y_true = y_true[mask]
+    #     y_pred = y_pred[mask]
+
+    # # adding checks since in certain cases the auc might not be defined we do not want to fail
+    # # the code
+    # try:
+    #     loss_score = log_loss(y_true, y_pred)
+    # except ValueError as e:
+    #     logging.error("Failure found during evaluation of the roc_auc metric due to the" + \
+    #                   " reason: %s", str(e))
+    #     raise
+
+    return loss_score

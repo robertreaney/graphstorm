@@ -225,7 +225,7 @@ class GSgnnNodePredictionTrainer(GSgnnTrainer):
                 if self.can_do_validation(val_loader) and self.evaluator.do_eval(total_steps):
                     val_score = self.eval(model.module if is_distributed() else model,
                                           val_loader, test_loader,
-                                          use_mini_batch_infer, total_steps, return_proba=False)
+                                          use_mini_batch_infer, total_steps, return_proba=True)
 
                     if self.evaluator.do_early_stop(val_score):
                         early_stop = True
@@ -242,7 +242,7 @@ class GSgnnNodePredictionTrainer(GSgnnTrainer):
                             # for model saving, force to do evaluation if can
                             val_score = self.eval(model.module if is_distributed() else model,
                                                 val_loader, test_loader, use_mini_batch_infer,
-                                                total_steps, return_proba=False)
+                                                total_steps, return_proba=True)
                     # We will save the best model when
                     # 1. If not do evaluation, we will keep the latest K models.
                     # 2. If do evaluaiton, we need to follow the guidance of validation score.
@@ -266,7 +266,7 @@ class GSgnnNodePredictionTrainer(GSgnnTrainer):
             if self.can_do_validation(val_loader):
                 val_score = self.eval(model.module if is_distributed() else model,
                                       val_loader, test_loader,
-                                      use_mini_batch_infer, total_steps, return_proba=False)
+                                      use_mini_batch_infer, total_steps, return_proba=True)
                 if self.evaluator.do_early_stop(val_score):
                     early_stop = True
 
@@ -327,6 +327,7 @@ class GSgnnNodePredictionTrainer(GSgnnTrainer):
         val_score: dict
             Validation scores of differnet metrics in the format of {metric: val_score}.
         """
+        logging.error(f"RETURN PROBA={return_proba}")
         teval = time.time()
         sys_tracker.check('before prediction')
 
