@@ -94,6 +94,103 @@ class ClassifyLossFunc(GSLayer):
         """
         return None
 
+
+class MaskedClassifyLossFunc(GSLayer):
+    """ Loss function for classification tasks that have masked labels.
+
+    If multilabel is set to True, the ``torch.nn.BCEWithLogitsLoss``
+    is used, otherwise the ``torch.nn.CrossEntropyLoss`` is used.
+
+    Parameters
+    ----------
+    multilabel : bool
+        Whether this is multi-label classification.
+    multilabel_weights : Tensor
+        The label weights for multi-label classifciation.
+        Default: None
+    imbalance_class_weights : Tensor
+        The class weights for imbalanced classes.
+        Default: None
+    """
+    def __init__(self, label_mask, multilabel, multilabel_weights=None, imbalance_class_weights=None):
+        super(MaskedClassifyLossFunc, self).__init__()
+        self.multilabel = multilabel
+        self.true = None
+        self.false = None
+        
+        # find values of true/false from config
+        for item in label_mask:
+            key, value = item.split(':')
+            assert key in ['true', 'false'], (
+                "`label_mask` configuration only expects `true` and `false "
+                f"encountered: {key}"
+            )
+            setattr(self, key.strip(), int(value.strip()))
+
+        if multilabel:
+            self.loss_fn = nn.BCEWithLogitsLoss(weight=imbalance_class_weights,
+                                                pos_weight=multilabel_weights)
+        else:
+            self.loss_fn = nn.CrossEntropyLoss(weight=imbalance_class_weights)
+
+    def forward(self, logits, labels):
+        """ The forward function.
+
+        Parameters
+        ----------
+        logits: torch.Tensor
+            The prediction results.
+        labels: torch.Tensor
+            The training labels.
+
+        Returns
+        -------
+        loss: Tensor
+            The loss value.
+        """
+        # implement masking
+        true_val = labels.new_tensor(self.true)
+        false_val = labels.new_tensor(self.false)
+        mask = (labels == true_val) | (labels == false_val)
+        # map true to 1 and false to 0
+        labels = th.where(
+            labels == true_val, 
+            1, 
+            th.where(labels == false_val, 0, -1)
+        )
+
+        labels = labels[mask]
+        logits = logits[mask]
+
+        if self.multilabel:
+            # BCEWithLogitsLoss wants labels be th.Float
+            loss = self.loss_fn(logits, labels.type(th.float32))
+            return loss
+        else:
+            
+            loss = self.loss_fn(logits, labels.long())
+            return loss
+
+    @property
+    def in_dims(self):
+        """ The number of input dimensions.
+
+        Returns
+        -------
+        int : the number of input dimensions.
+        """
+        return None
+
+    @property
+    def out_dims(self):
+        """ The number of output dimensions.
+
+        Returns
+        -------
+        int : the number of output dimensions.
+        """
+        return None
+
 class FocalLossFunc(GSLayer):
     """ Focal loss function for classification tasks.
 

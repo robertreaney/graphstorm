@@ -69,6 +69,7 @@ from .edge_decoder import (DenseBiDecoder,
 from .gnn_encoder_base import GraphConvEncoder
 
 from .loss_func import (ClassifyLossFunc,
+                        MaskedClassifyLossFunc,
                         FocalLossFunc,
                         RegressionLossFunc,
                         ShrinkageLossFunc,

@@ -48,6 +48,7 @@ from .config import (BUILTIN_LP_LOSS_CROSS_ENTROPY,
                      BUILTIN_LP_LOSS_CONTRASTIVELOSS,
                      BUILTIN_LP_LOSS_BPR,
                      BUILTIN_CLASS_LOSS_CROSS_ENTROPY,
+                     BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED,
                      BUILTIN_CLASS_LOSS_FOCAL,
                      BUILTIN_REGRESSION_LOSS_MSE,
                      BUILTIN_REGRESSION_LOSS_SHRINKAGE)
@@ -71,6 +72,7 @@ from .model.node_glem import GLEM
 from .model.edge_gnn import GSgnnEdgeModel
 from .model.lp_gnn import GSgnnLinkPredictionModel
 from .model.loss_func import (ClassifyLossFunc,
+                              MaskedClassifyLossFunc,
                               RegressionLossFunc,
                               ShrinkageLossFunc,
                               LinkPredictBCELossFunc,
@@ -530,6 +532,26 @@ def create_builtin_node_decoder(g, decoder_input_dim, config, train_task):
                     "to 2 or greater."
                 )
                 loss_func = ClassifyLossFunc(config.multilabel,
+                                             config.multilabel_weights,
+                                             config.imbalance_class_weights)
+            elif config.class_loss_func == BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED:
+                assert config.num_classes > 1, (
+                    f"When using {BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED} loss "
+                    "function, please make sure the num_classes is set "
+                    "to 2 or greater."
+                )
+
+                assert hasattr(config, '_label_mask'), (
+                    f"When using {BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED} loss "
+                    "function, please make sure the label_mask is set "
+                    "to define true/false like "
+                    "label_mask:"
+                    "  -'true:1'"
+                    "  -'false:-1'"
+                )
+
+                loss_func = MaskedClassifyLossFunc(config._label_mask,
+                                             config.multilabel,
                                              config.multilabel_weights,
                                              config.imbalance_class_weights)
             elif config.class_loss_func == BUILTIN_CLASS_LOSS_FOCAL:
