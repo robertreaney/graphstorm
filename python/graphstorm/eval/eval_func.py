@@ -1105,45 +1105,12 @@ def compute_amri(ranking: th.Tensor, candidate_sizes: th.Tensor) -> th.Tensor:
     return 1 - th.div(nominator, denominator)
 
 
-def compute_loss(y_preds, y_targets, mask=None):
-    """ compute log_loss score with optional masking
-        If any errors occur, raise the error to callers and stop.
-
-        Parameters
-        ----------
-        y_preds : Target scores in 2D tensor.
-                  Array-like of shape (n_samples, n_classes) with logits.
-        y_targets: Array-like of shape (n_samples,) or (n_samples, n_classes) True labels or
-                   binary label indicators. The binary and multiclass cases expect labels with
-                   shape (n_samples,) while the multilabel case expects binary label indicators
-                   with shape (n_samples, n_classes).
-        mask: Mask in the shape of y_preds to mask out unlabeled predictions
-        Returns
-        -------
-        float: The roc_auc score.
-    """
-    mask = (y_targets != 0)
-
+def compute_loss(y_preds, y_targets):
+    mask = (y_targets == 1) | (y_targets == -1)  # Only 1 or -1
     y_true = th.where(y_targets == -1, 0, y_targets)
-
-    loss_score = th.nn.functional.binary_cross_entropy_with_logits(y_preds[mask], y_true[mask].to(dtype=y_preds.dtype)).item()
-
-    # y_true = y_true.cpu().numpy()
-    # # y_true = y_targets.cpu().numpy()
-    # y_pred = y_preds.cpu().numpy()
-
-    # if mask is not None:
-    #     mask = mask.cpu().numpy()
-    #     y_true = y_true[mask]
-    #     y_pred = y_pred[mask]
-
-    # # adding checks since in certain cases the auc might not be defined we do not want to fail
-    # # the code
-    # try:
-    #     loss_score = log_loss(y_true, y_pred)
-    # except ValueError as e:
-    #     logging.error("Failure found during evaluation of the roc_auc metric due to the" + \
-    #                   " reason: %s", str(e))
-    #     raise
+    
+    loss_score = th.nn.functional.binary_cross_entropy_with_logits(
+        y_preds[mask], y_true[mask].to(dtype=y_preds.dtype)
+    ).item()
 
     return loss_score
