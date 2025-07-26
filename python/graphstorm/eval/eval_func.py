@@ -23,7 +23,7 @@ from functools import partial
 
 import numpy as np
 import torch as th
-from sklearn.metrics import roc_auc_score, log_loss
+from sklearn.metrics import roc_auc_score
 from sklearn.metrics import (precision_recall_curve,
                              auc,
                              classification_report,
@@ -68,7 +68,7 @@ class ClassificationMetrics:
         self.metric_comparator["per_class_roc_auc"] = comparator_per_class_roc_auc
         self.metric_comparator["precision"] = operator.le
         self.metric_comparator["recall"] = operator.le
-        self.metric_comparator["loss"] = operator.le
+        self.metric_comparator["loss"] = operator.ge
 
         # This is the operator used to measure each metric performance in training
         self.metric_function = {}
@@ -165,7 +165,13 @@ class ClassificationMetrics:
         """
         # Need to check if the given metric is supported first
         self.assert_supported_metric(metric)
-        return 0
+
+        comparator = self.metric_comparator[metric]
+
+        if comparator == operator.le:
+            return 0
+        else:
+            return float('inf')
 
 
 class RegressionMetrics:
