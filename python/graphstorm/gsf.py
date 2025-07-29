@@ -1143,7 +1143,10 @@ def set_encoder(model, g, config, train_task):
                 use_node_embeddings=config.use_node_embeddings,
                 force_no_embeddings=config.construct_feat_ntype,
                 num_ffn_layers_in_input=config.num_ffn_layers_in_input,
-                use_wholegraph_sparse_emb=config.use_wholegraph_embed)
+                use_wholegraph_sparse_emb=config.use_wholegraph_embed,
+                use_node_encoder_residuals=getattr(config, 'use_node_encoder_residuals', False),
+                use_node_encoder_wide_layer=getattr(config, 'use_node_encoder_wide_layer', False)
+                )
         # set edge encoder input layer no matter if having edge feature names or not
         # TODO: add support of languange models and GLEM
         edge_feat_size = get_edge_feat_size(g, config.edge_feat_name)

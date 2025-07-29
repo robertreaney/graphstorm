@@ -487,12 +487,24 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                  num_ffn_layers_in_input=0,
                  ffn_activation=F.relu,
                  cache_embed=False,
-                 use_wholegraph_sparse_emb=False):
+                 use_wholegraph_sparse_emb=False,
+                 use_node_encoder_residuals=False,
+                 use_node_encoder_wide_layer=False):
         super(GSNodeEncoderInputLayer, self).__init__(g)
         self.embed_size = embed_size
         self.dropout = nn.Dropout(dropout)
         self.use_node_embeddings = use_node_embeddings
         self._use_wholegraph_sparse_emb = use_wholegraph_sparse_emb
+        self.use_node_encoder_residuals = use_node_encoder_residuals
+        self.use_node_encoder_wide_layer = use_node_encoder_wide_layer
+
+        if self.use_node_encoder_residuals:
+            assert (feat_size != embed_size), 'When use_node_encoder_residuals is True, feat_size must be equal to embed_size.'
+            assert not self.use_node_embeddings, 'When use_node_encoder_residuals is True, use_node_embeddings must be False.'
+
+        if self.use_node_encoder_wide_layer:
+            assert num_ffn_layers_in_input == 1, 'When use_node_encoder_wide_layer is True, num_ffn_layers_in_input must be 1.'
+
         self.feat_size = feat_size
         if force_no_embeddings is None:
             force_no_embeddings = []
@@ -538,7 +550,10 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                     if get_rank() == 0:
                         logging.debug("Node %s has %d features.", ntype, feat_dim)
 
-                    input_projs = nn.Parameter(th.Tensor(feat_dim, self.embed_size))
+                    if self.use_node_encoder_wide_layer:
+                        input_projs = nn.Parameter(th.Tensor(feat_dim, int(feat_dim*4)))
+                    else:
+                        input_projs = nn.Parameter(th.Tensor(feat_dim, self.embed_size))
                     nn.init.xavier_uniform_(input_projs, gain=nn.init.calculate_gain("relu"))
                     self.input_projs[ntype] = input_projs
 
@@ -594,7 +609,11 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
         self.num_ffn_layers_in_input = num_ffn_layers_in_input
         self.ngnn_mlp = nn.ModuleDict({})
         for ntype in g.ntypes:
-            self.ngnn_mlp[ntype] = NGNNMLP(embed_size, embed_size,
+            if self.use_node_encoder_wide_layer:
+                self.ngnn_mlp[ntype] = NGNNMLP(int(feat_dim*4), embed_size,
+                            num_ffn_layers_in_input, ffn_activation, dropout)
+            else:
+                self.ngnn_mlp[ntype] = NGNNMLP(embed_size, embed_size,
                             num_ffn_layers_in_input, ffn_activation, dropout)
 
     def _init_node_embeddings(self, g, ntype, embed_size):
@@ -644,6 +663,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
         assert isinstance(input_feats, dict), 'The input features should be in a dict.'
         assert isinstance(input_nodes, dict), 'The input node IDs should be in a dict.'
         embs = {}
+
         for ntype in input_nodes:
             if isinstance(input_nodes[ntype], np.ndarray):
                 # WholeGraphSparseEmbedding requires the input nodes (indexing tensor)
@@ -654,6 +674,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                 if ntype in self.input_projs:
                     # If the input data is not float, we need to convert it t float first.
                     emb = input_feats[ntype].float() @ self.input_projs[ntype]
+
                     if self.use_node_embeddings:
                         assert ntype in self.sparse_embeds, \
                             f"We need sparse embedding for node type {ntype}"
@@ -718,6 +739,10 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
             return h
 
         embs = {ntype: _apply(ntype, h) for ntype, h in embs.items()}
+
+        if self.use_node_encoder_residuals:
+            embs = {ntype: h + input_feats[ntype].float() for ntype, h in embs.items()}
+        
         return embs
 
     def require_cache_embed(self):
