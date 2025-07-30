@@ -376,10 +376,12 @@ class RelationalGATEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
                  use_self_loop=True,
                  last_layer_act=False,
                  num_ffn_layers_in_gnn=0,
-                 norm=None):
+                 norm=None,
+                 use_encoder_residuals=False):
         super(RelationalGATEncoder, self).__init__(h_dim, out_dim, num_hidden_layers,
                                                    edge_feat_name, edge_feat_mp_op)
         self.num_heads = num_heads
+        self.use_encoder_residuals = use_encoder_residuals
 
         # check edge type string format
         if edge_feat_name:
@@ -441,6 +443,9 @@ class RelationalGATEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
         h: dict of Tensor
             Output node embeddings for each node type in the format of {ntype: tensor}.
         """
+        if self.use_encoder_residuals:
+            x = {k: v.clone() for k,v in n_h.items()}
+
         if e_hs is not None:
             assert len(e_hs) == len(blocks), 'The size of the list of edge features should ' + \
                 f'be equal to the number of blocks, but got {len(e_hs)} layers of edge ' + \
@@ -451,6 +456,10 @@ class RelationalGATEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
         else:
             for layer, block in zip(self.layers, blocks):
                 n_h = layer(block, n_h)
+
+        if self.use_encoder_residuals:
+            for node_type in n_h:
+                n_h[node_type] = n_h[node_type] + x[node_type]
 
         return n_h
 

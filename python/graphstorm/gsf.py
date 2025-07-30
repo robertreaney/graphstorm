@@ -1195,7 +1195,8 @@ def set_encoder(model, g, config, train_task):
                                            dropout=dropout,
                                            use_self_loop=config.use_self_loop,
                                            num_ffn_layers_in_gnn=config.num_ffn_layers_in_gnn,
-                                           norm=config.gnn_norm)
+                                           norm=config.gnn_norm,
+                                           use_encoder_residuals=getattr(config, 'use_encoder_residuals', False))
     elif model_encoder_type == "hgt":
         # we need to set the num_layers -1 because there is an output layer that is hard coded.
         gnn_encoder = HGTEncoder(g,
