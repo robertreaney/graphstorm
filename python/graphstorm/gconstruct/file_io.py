@@ -324,8 +324,13 @@ def read_data_parquet(data_file, data_fields=None):
     if data_fields is None:
         data_fields = list(df_table.keys())
     for key in data_fields:
-        assert key in df_table, f"The data field {key} does not exist in {data_file}."
-        d = df_table[key].to_numpy()
+        
+        if os.getenv("RESONATE", False) and key == "labels" and key not in df_table:
+            n_outputs = 18_767
+            d = np.zeros((len(df_table), n_outputs), dtype=np.int8)
+        else:
+            assert key in df_table, f"The data field {key} does not exist in {data_file}."
+            d = df_table[key].to_numpy()
 
         # For multi-dimension arrays, we split them by rows and
         # save them as objects in parquet. We need to merge them
