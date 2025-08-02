@@ -1109,7 +1109,7 @@ def compute_loss(y_preds, y_targets):
     mask = (y_targets == 1) | (y_targets == -1)  # Only 1 or -1
     y_true = th.where(y_targets == -1, 0, y_targets)
     
-    loss_score = th.nn.functional.binary_cross_entropy_with_logits(
+    loss_score = th.nn.functional.binary_cross_entropy(
         y_preds[mask], y_true[mask].to(dtype=y_preds.dtype)
     ).item()
 
