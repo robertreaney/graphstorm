@@ -117,9 +117,12 @@ class GSgnnNodeModel(GSgnnModel, GSgnnNodeModelInterface):
     alpha_l2norm : float
         The alpha value for L2 normalization.
     """
-    def __init__(self, alpha_l2norm):
+    def __init__(self, alpha_l2norm, use_model_residuals=False):
         super(GSgnnNodeModel, self).__init__()
         self.alpha_l2norm = alpha_l2norm
+        self.use_model_residuals = use_model_residuals
+        if use_model_residuals:
+            logging.warning("Using model residuals in GSgnnNodeModel NOT IMPLEMENTED.")
 
     def forward(self, blocks, node_feats, edge_feats, labels, input_nodes=None):
         """ The forward function for node prediction.

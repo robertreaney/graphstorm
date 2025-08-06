@@ -660,7 +660,7 @@ def create_builtin_node_model(g, config, train_task):
     if config.training_method["name"] == "glem":
         model = GLEM(config.alpha_l2norm, config.target_ntype, **config.training_method["kwargs"])
     elif config.training_method["name"] == "default":
-        model = GSgnnNodeModel(config.alpha_l2norm)
+        model = GSgnnNodeModel(config.alpha_l2norm, use_model_residuals=getattr(config, "use_model_residuals", False))
     set_encoder(model, g, config, train_task)
 
     encoder_out_dims = model.gnn_encoder.out_dims \
@@ -1145,7 +1145,8 @@ def set_encoder(model, g, config, train_task):
                 num_ffn_layers_in_input=config.num_ffn_layers_in_input,
                 use_wholegraph_sparse_emb=config.use_wholegraph_embed,
                 use_node_encoder_residuals=getattr(config, 'use_node_encoder_residuals', False),
-                use_node_encoder_wide_layer=getattr(config, 'use_node_encoder_wide_layer', False)
+                use_node_encoder_wide_layer=getattr(config, 'use_node_encoder_wide_layer', False),
+                ffn_activation=getattr(config, 'ffn_activation', 'relu')
                 )
         # set edge encoder input layer no matter if having edge feature names or not
         # TODO: add support of languange models and GLEM

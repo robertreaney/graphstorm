@@ -485,7 +485,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                  use_node_embeddings=False,
                  force_no_embeddings=None,
                  num_ffn_layers_in_input=0,
-                 ffn_activation=F.relu,
+                 ffn_activation='relu',
                  cache_embed=False,
                  use_wholegraph_sparse_emb=False,
                  use_node_encoder_residuals=False,
@@ -511,6 +511,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
 
         self.activation = activation
         self.cache_embed = cache_embed
+        ffn_activation = getattr(F, ffn_activation)
 
         if self._use_wholegraph_sparse_emb:
             assert get_backend() == "nccl",  \

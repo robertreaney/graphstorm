@@ -1280,6 +1280,8 @@ class GSConfig:
                 return None
             elif self._input_activate == "relu":
                 return F.relu
+            elif self._input_activate == "gelu":
+                return F.gelu
             else:
                 raise RuntimeError("Only support input activate flag 'none' for None "
                                    "and 'relu' for torch.nn.functional.relu")
