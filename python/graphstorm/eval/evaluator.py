@@ -2147,9 +2147,6 @@ class GSgnnMultiTaskEvaluator(GSgnnBaseEvaluator, GSgnnMultiTaskEvalInterface):
         # if None all nodes are used.
         self._history = []
         self.tracker = None
-        self._best_val_score = None
-        self._best_test_score = None
-        self._best_iter = None
 
         self._task_evaluators = task_evaluators
         assert len(self.task_evaluators) > 1, \
@@ -2160,53 +2157,58 @@ class GSgnnMultiTaskEvaluator(GSgnnBaseEvaluator, GSgnnMultiTaskEvalInterface):
             task_id: evaluator.metric_list for task_id, evaluator in self.task_evaluators.items()
         }
 
+        metrics = [v[0] for k,v in self.metric_list.items()]
+        assert all([x == metrics[0] for x in metrics]), f'Only handling a single metric for all tasks currently, encountered metrics={metrics}'
+
+        self._multilabel = True
+        self._best_val_score = {}
+        self._best_test_score = {}
+        self._best_iter = {}
+        self.metrics_obj = ClassificationMetrics([metrics[0]], multilabel=True)
+
+        for metric in list(set(metrics)):
+            self.metrics_obj.assert_supported_metric(metric=metric)
+            self._best_val_score[metric] = self.metrics_obj.init_best_metric(metric=metric)
+            self._best_test_score[metric] = self.metrics_obj.init_best_metric(metric=metric)
+            self._best_iter[metric] = 0
+
         self._eval_frequency = eval_frequency
-        # TODO(xiang): Support early stop
-        assert use_early_stop is False, \
-            "GSgnnMultiTaskEvaluator does not support early stop now."
         self._do_early_stop = use_early_stop
+        if self._do_early_stop:
+            self._early_stop_burnin_rounds = early_stop_burnin_rounds
+            self._num_early_stop_calls = 0
+            self._early_stop_rounds = early_stop_rounds
+            self._early_stop_strategy = early_stop_strategy
+            self._val_perf_list = []
 
         # add this list to store all of the performance rank of validation scores for pick top k
         self._val_perf_rank_list = []
 
-
-    # pylint: disable=unused-argument
-    def do_early_stop(self, val_score):
-        """ Decide whether to stop the training
-
-        Note: do not support early stop for multi-task learning.
-        Will support it later.
-
-        Parameters
-        ----------
-        val_score: float
-            Evaluation score
-        """
-        raise RuntimeError("GSgnnMultiTaskEvaluator.do_early_stop is not implemented")
-
     def get_metric_comparator(self):
-        """ Return the comparator of the major eval metric.
+        assert self.metrics_obj is not None, "Evaluation metrics object should not be None."
+        metric = next(iter(self.metric_list.values()))
+        return self.metrics_obj.metric_comparator[metric[0]]
 
-            Note: not support now.
-
+    def _get_early_stop_score(self, val_score: Dict) -> float:
+        """ By default, always get the first validation
+        score as the indicator for early stop.
         """
-        raise RuntimeError("GSgnnMultiTaskEvaluator.get_metric_comparator is not implemented")
+        # val_score = {'node_classification-rcid-labels': {'loss': 0.27277278900146484}, 'node_classification-hem-labels': {'loss': 0.27056413888931274}}
+        score = 0
 
-    # pylint: disable=unused-argument
-    def get_val_score_rank(self, val_score):
-        """
-        Get the rank of the given validation score by comparing its values to the existing value
-        list.
+        # First metric is the key eval metric
+        for task, metrics in self.metric_list.items():
 
-        Note: not support now.
+            metric = metrics[0]
 
-        Parameters
-        ----------
-        val_score: dict
-            A dictionary whose key is the metric and the value is a score from evaluator's
-            validation computation.
-        """
-        raise RuntimeError("GSgnnMultiTaskEvaluator.get_val_score_rank is not implemented")
+            assert metric in val_score[task], \
+                f"{metric} is used to guide the early stop. " \
+                f"But the evaluation scores did not include {metric}." \
+                f"Instead we get {val_score[task]}"
+
+            score += val_score[task][metric]
+
+        return score
 
     @property
     def task_evaluators(self):
@@ -2243,10 +2245,6 @@ class GSgnnMultiTaskEvaluator(GSgnnBaseEvaluator, GSgnnMultiTaskEvalInterface):
                 for task_id, evaluator in self.task_evaluators.items()
         }
         return best_iter_num
-
-    @property
-    def val_perf_rank_list(self):
-        raise RuntimeError("GSgnnMultiTaskEvaluator.val_perf_rank_list not supported")
 
     def evaluate(
         self,

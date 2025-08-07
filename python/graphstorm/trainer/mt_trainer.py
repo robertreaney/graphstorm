@@ -418,6 +418,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
 
         # training loop
         total_steps = 0
+        early_stop = False
         sys_tracker.check('start training')
         for epoch in range(num_epochs):
             model.train()
@@ -484,6 +485,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
                     # 2. (TODO) There is evaluaiton, we need to follow the
                     #    guidance of validation score.
                     # So here reset val_score to be None
+                    # TODO track the best model
                     val_score = None
                     self.save_topk_models(model, epoch, i, val_score, save_model_path)
 
@@ -502,14 +504,19 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
             if self.can_do_validation(val_loader):
                 val_score = self.eval(model.module if is_distributed() else model,
                                       data, val_loader, test_loader, total_steps)
+                if self.evaluator.do_early_stop(val_score):
+                    early_stop = True
 
             # After each epoch, check to save the top k models.
             # Will either save the last k model or all models
             # depends on the setting of top k.
-            self.save_topk_models(model, epoch, None, None, save_model_path)
+            self.save_topk_models(model, epoch, None, self.evaluator._get_early_stop_score(val_score), save_model_path)
             rt_profiler.print_stats()
             # make sure saving model finishes properly before the main process kills this training
             barrier()
+
+            if early_stop is True:
+                break
 
         rt_profiler.save_profile()
         print_mem(device)
@@ -524,6 +531,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
                            self.evaluator.best_iter_num,
                        'best model path': \
                            self.get_best_model_path() if save_model_path is not None else None}
+            # TODO why doesn't this actually return the path to minimum loss?
             self.log_params(output)
 
     def eval(self, model, data, mt_val_loader, mt_test_loader, total_steps,
