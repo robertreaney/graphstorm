@@ -510,7 +510,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
             # After each epoch, check to save the top k models.
             # Will either save the last k model or all models
             # depends on the setting of top k.
-            self.save_topk_models(model, epoch, None, self.evaluator._get_early_stop_score(val_score), save_model_path)
+            self.save_topk_models(model, epoch, None, val_score, save_model_path)
             rt_profiler.print_stats()
             # make sure saving model finishes properly before the main process kills this training
             barrier()

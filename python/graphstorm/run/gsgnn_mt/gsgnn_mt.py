@@ -447,6 +447,36 @@ def main(config_args):
 
     tracker = gs.create_builtin_task_tracker(config)
     if gs.get_rank() == 0:
+        # add model summary here
+        try:
+            total_params = sum(p.numel() for p in model.parameters())
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        except Exception:
+            total_params = None
+            trainable_params = None
+
+        logging.info("Model summary:\n%s", model)
+        if total_params is not None:
+            logging.info("Parameters | total: %s | trainable: %s",
+                         f"{total_params:,}", f"{trainable_params:,}")
+            
+            # print parameters per child module
+            for name, child in model.named_children():
+                params = [p for p in child.parameters() if p.requires_grad]
+                n_params = sum(p.numel() for p in params)
+                logging.info("  %-30s params=%s", name, f"{n_params:,}")
+                
+        logging.info("Configured tasks: %s", ", ".join([t.task_id for t in tasks]))
+
+        # test out mermaid diagram
+        from graphstorm.model_introspection import save_mermaid_diagram
+        try:
+            save_mermaid_diagram(model, "model_diagram.md", tasks)
+            logging.info("Saved model diagram to model_diagram.md")
+        except Exception as e:
+            logging.warning("Failed to save model diagram: %s", e)
+
+        # stop model summary
         tracker.log_params(config.__dict__)
     trainer.setup_task_tracker(tracker)
 
