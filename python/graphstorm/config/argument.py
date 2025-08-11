@@ -2023,7 +2023,7 @@ class GSConfig:
         """Which resonate node encoder to use"""
         # pylint: disable=no-member
         if hasattr(self, "_resonate_encoder"):
-            assert self._resonate_encoder in ['HMA']
+            assert self._resonate_encoder.lower() in ['hma', 'moe']
             return self._resonate_encoder
         return None
 

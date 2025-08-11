@@ -36,7 +36,7 @@ from ..utils import (
     create_dist_tensor,
 )
 from .ngnn_mlp import NGNNMLP
-from .resonate import HMA
+from .resonate import HMA, MoE
 from ..wholegraph import WholeGraphDistTensor
 from ..wholegraph import is_wholegraph_init
 from ..utils import is_wholegraph
@@ -851,11 +851,11 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
                  force_no_embeddings=None,
                  cache_embed=False,
                  use_node_encoder_residuals=True,
-                 encoder_type='HMA'):
+                 encoder_type='hma'):
         super(ResonateNodeEncoderInputLayer, self).__init__(g)
         logging.warning(f"Using resonate node encoder layer! feat_size={feat_size} embed_size={embed_size} dropout={dropout} resid={use_node_encoder_residuals}")
 
-        assert encoder_type.lower() in ['hma'], f'Resonate encoder type not supported: {encoder_type}. Choose from -> ["HMA"]'
+        assert encoder_type.lower() in ['hma', 'moe'], f'Resonate encoder type not supported: {encoder_type}. Choose from -> ["HMA", "MOE"]'
         self.encoder_type = encoder_type.lower()
 
         self.embed_size = embed_size
@@ -925,6 +925,15 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
                 self.encoder[ntype] = HMA(
                     in_features=feat_size[ntype],
                     out_features=self.embed_size
+                )
+            elif self.encoder_type == 'moe':
+                self.encoder[ntype] = MoE(
+                    input_size=feat_size[ntype], 
+                    output_size=self.embed_size, 
+                    num_experts=16, 
+                    hidden_size=1024, 
+                    k=4, 
+                    noisy_gating=True
                 )
 
     def _init_node_embeddings(self, g, ntype, embed_size):
