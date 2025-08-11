@@ -58,7 +58,7 @@ from .eval.eval_func import (SUPPORTED_HIT_AT_METRICS,
                              SUPPORTED_LINK_PREDICTION_METRICS)
 from .model.embed import (GSPureLearnableInputLayer,
                           GSNodeEncoderInputLayer,
-                          GSEdgeEncoderInputLayer)
+                          GSEdgeEncoderInputLayer, ResonateNodeEncoderInputLayer)
 from .model.lm_embed import GSLMNodeEncoderInputLayer, GSPureLMNodeInputLayer
 from .model.rgcn_encoder import RelationalGCNEncoder, RelGraphConvLayer
 from .model.rgat_encoder import RelationalGATEncoder
@@ -1136,18 +1136,28 @@ def set_encoder(model, g, config, train_task):
                 config.hidden_size,
                 use_wholegraph_sparse_emb=config.use_wholegraph_embed)
         else:
-            node_encoder = GSNodeEncoderInputLayer(g,
-                node_feat_size, config.hidden_size,
-                dropout=config.dropout,
-                activation=config.input_activate,
-                use_node_embeddings=config.use_node_embeddings,
-                force_no_embeddings=config.construct_feat_ntype,
-                num_ffn_layers_in_input=config.num_ffn_layers_in_input,
-                use_wholegraph_sparse_emb=config.use_wholegraph_embed,
-                use_node_encoder_residuals=getattr(config, 'use_node_encoder_residuals', False),
-                use_node_encoder_wide_layer=getattr(config, 'use_node_encoder_wide_layer', False),
-                ffn_activation=getattr(config, 'ffn_activation', 'relu')
-                )
+            if config.use_resonate_node_encoder:
+                node_encoder = ResonateNodeEncoderInputLayer(g,
+                    node_feat_size, config.hidden_size,
+                    dropout=config.dropout,
+                    force_no_embeddings=config.construct_feat_ntype,
+                    use_node_encoder_residuals=config.use_node_encoder_residuals,
+                    encoder_type=config.resonate_encoder
+                    )
+            else:
+                node_encoder = GSNodeEncoderInputLayer(g,
+                    node_feat_size, config.hidden_size,
+                    dropout=config.dropout,
+                    activation=config.input_activate,
+                    use_node_embeddings=config.use_node_embeddings,
+                    force_no_embeddings=config.construct_feat_ntype,
+                    num_ffn_layers_in_input=config.num_ffn_layers_in_input,
+                    use_wholegraph_sparse_emb=config.use_wholegraph_embed,
+                    use_node_encoder_residuals=config.use_node_encoder_residuals,
+                    use_node_encoder_wide_layer=config.use_node_encoder_wide_layer,
+                    ffn_activation=config.ffn_activation
+                    )
+
         # set edge encoder input layer no matter if having edge feature names or not
         # TODO: add support of languange models and GLEM
         edge_feat_size = get_edge_feat_size(g, config.edge_feat_name)
