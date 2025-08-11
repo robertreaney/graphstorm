@@ -19,6 +19,7 @@
 import abc
 import logging
 import time
+from cycler import V
 import torch as th
 import dgl
 from torch import nn
@@ -511,6 +512,7 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
         self._decoder = None
         self._loss_fn = None
         self._optimizer = None
+        self._use_model_residuals = False
 
     def get_dense_params(self):
         """retrieve the all dense layers' parameters as a parameter list except for
@@ -916,6 +918,22 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
                 gnn_embs = self.gnn_encoder(blocks, node_input_embs, edge_input_embs)
             else:
                 gnn_embs = self.gnn_encoder(blocks, node_input_embs)
+
+                if self._use_model_residuals:
+                    def _apply(gnn, node_emb, k):
+                        size = gnn.size(0)
+                        if size == 0:
+                            return gnn
+                        else:
+                            # here is code to create a mapping but its just the first B rows
+                            # input_ids = input_nodes[k]
+                            # output_ids = blocks[-1].dstdata[dgl.NID][k]
+                            # id_map = {item.item(): idx for idx, item in enumerate(input_ids)}
+                            # output_idx = [id_map[id.item()] for id in output_ids]
+
+                            return gnn + node_emb[:size]
+                    
+                    gnn_embs = {k: _apply(v, node_input_embs[k], k) for k, v in gnn_embs.items()}
         else:
             gnn_embs = node_input_embs
         return gnn_embs

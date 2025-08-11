@@ -852,6 +852,7 @@ class GSConfig:
             _ = self.use_node_encoder_residuals
             _ = self.use_node_encoder_wide_layer
             _ = self.ffn_activation
+            _ = self.use_model_residuals
             _ = self.use_resonate_node_encoder
             _ = self.resonate_encoder
 
@@ -1998,10 +1999,20 @@ class GSConfig:
             assert self._ffn_activation in ['none', 'relu', 'gelu']
             return self._ffn_activation
         return "relu"
+
+    @property
+    def use_model_residuals(self):
+        """Use node encoder outputs to make residual connection before decoder"""
+        # pylint: disable=no-member
+        if hasattr(self, "_use_model_residuals"):
+            assert self._use_model_residuals in [True, False]
+            return self._use_model_residuals
+        return False
     
     @property
     def use_resonate_node_encoder(self):
         """Select the custom ResonateNodeEncoder object."""
+        # pylint: disable=no-member
         if hasattr(self, "_use_resonate_node_encoder"):
             assert self._use_resonate_node_encoder in [True, False]
             return self._use_resonate_node_encoder
@@ -2010,6 +2021,7 @@ class GSConfig:
     @property
     def resonate_encoder(self):
         """Which resonate node encoder to use"""
+        # pylint: disable=no-member
         if hasattr(self, "_resonate_encoder"):
             assert self._resonate_encoder in ['HMA']
             return self._resonate_encoder

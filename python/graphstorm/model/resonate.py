@@ -124,4 +124,4 @@ class HMA(Module):
         # x = x + torch.randn_like(x) * 0  # this hyperparam is also 0
         
         x = self.decoder(x)
-        return x
+        return relu(x)

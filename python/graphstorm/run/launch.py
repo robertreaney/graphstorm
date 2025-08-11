@@ -1233,6 +1233,12 @@ def get_argument_parser():
               Used with built-in training/inference scripts"
     )
     parser.add_argument(
+        "--train-and-infer",
+        action="store_true",
+        help="Indicate that it is a train and inference task. \
+              Used with built-in training/inference scripts"
+    )
+    parser.add_argument(
         "--lm-encoder-only",
         action="store_true",
         help="Inidcate that the model is using language model + decoder only. \

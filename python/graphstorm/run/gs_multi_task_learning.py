@@ -35,6 +35,8 @@ def main():
     lib_dir = os.path.abspath(os.path.dirname(__file__))
     if args.inference:
         cmd = "gsgnn_mt/mt_infer_gnn.py"
+    elif args.train_and_infer:
+        cmd = "gsgnn_mt/mt_train_and_infer.py"
     else:
         cmd = "gsgnn_mt/gsgnn_mt.py"
     cmd_path = os.path.join(lib_dir, cmd)
