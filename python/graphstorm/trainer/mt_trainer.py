@@ -22,6 +22,7 @@ import logging
 import torch as th
 from torch.nn.parallel import DistributedDataParallel
 import dgl
+import optuna
 
 from ..config import (BUILTIN_TASK_NODE_CLASSIFICATION,
                       BUILTIN_TASK_NODE_REGRESSION,
@@ -347,7 +348,8 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
             save_perf_results_path=None,
             freeze_input_layer_epochs=0,
             max_grad_norm=None,
-            grad_norm_type=2.0):
+            grad_norm_type=2.0,
+            optuna_trial=None):
         """ The fit function for multi-task learning.
 
         Performs the training for `self.model`. Iterates over all the tasks
@@ -462,10 +464,10 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
                     logging.debug("Per task Loss: %s", per_task_loss)
 
                 val_score = None
-                if self.can_do_validation(val_loader) and self.evaluator.do_eval(total_steps):
-                    val_score = self.eval(model.module if is_distributed() else model,
-                                          data, val_loader, test_loader, total_steps)
-                    # TODO(xiangsx): Add early stop support
+                # if self.can_do_validation(val_loader) and self.evaluator.do_eval(total_steps):
+                #     val_score = self.eval(model.module if is_distributed() else model,
+                #                           data, val_loader, test_loader, total_steps)
+                #     # TODO(xiangsx): Add early stop support
 
                 # Every n iterations, save the model and keep
                 # the last k models.
@@ -503,9 +505,15 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
             # do evaluation and model saving after each epoch if can
             if self.can_do_validation(val_loader):
                 val_score = self.eval(model.module if is_distributed() else model,
-                                      data, val_loader, test_loader, total_steps)
+                                      data, val_loader, test_loader, total_steps, use_mini_batch_infer=use_mini_batch_infer)
                 if self.evaluator.do_early_stop(val_score):
                     early_stop = True
+                    
+                if optuna_trial:
+                    optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
+                    if optuna_trial.should_prune():
+                        raise optuna.TrialPruned()
+
 
             # After each epoch, check to save the top k models.
             # Will either save the last k model or all models

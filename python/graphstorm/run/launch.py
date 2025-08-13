@@ -1239,6 +1239,11 @@ def get_argument_parser():
               Used with built-in training/inference scripts"
     )
     parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="Indicate that a task is a hyperparameter tuning routine."
+    )
+    parser.add_argument(
         "--lm-encoder-only",
         action="store_true",
         help="Inidcate that the model is using language model + decoder only. \

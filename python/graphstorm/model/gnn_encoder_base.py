@@ -235,7 +235,8 @@ def dist_minibatch_inference(g, gnn_encoder, get_input_embeds, batch_size, fanou
                                                  dtype=th.float32, name='h-last',
                                                  part_policy=g.get_node_partition_policy (ntype),
                                                  # TODO(zhengda) this makes the tensor persistent.
-                                                 persistent=True)
+                                                 # TODO(resonate) made this False for hyperparameter tuning
+                                                 persistent=False)
             infer_nodes[ntype] = node_split(th.ones((g.number_of_nodes(ntype),),
                                                         dtype=th.bool),
                                                 partition_book=g.get_partition_book(),
