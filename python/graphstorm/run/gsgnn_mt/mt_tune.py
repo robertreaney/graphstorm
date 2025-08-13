@@ -17,9 +17,8 @@ from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, creat
 from graphstorm.model_introspection import save_mermaid_diagram
 import optuna
 from functools import partial
-
-PATH = "/home/ubuntu/src/data-science-research/.data/optimization/0"
-STORAGE_PATH = "sqlite:///.data/study_name.db"
+import json
+from datetime import datetime
 
 def init_model(config, train_data):
     model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm, config.use_model_residuals)
@@ -93,10 +92,27 @@ def init_evaluation(config, train_data):
 
     return task_evaluators, (train_dataloader, val_dataloader, test_dataloader)
 
+def suggest_parameters(trial, config):
+    search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
+    # search_space = [
+    #     ('int', {'name': 'hidden_size', 'low': 32, 'high': 1024, 'step': 4})
+    # ]
+    params = {
+        x[1]['name']: getattr(trial, f'suggest_{x[0]}')(**x[1]) for x in search_space
+    }
+    # set number of graph convolutions by fanout param if it varies
+    if 'fanout' in params:
+        params['num_layers'] = len(params['fanout'].split(','))
+
+    return params
+
+
 def train(trial, config_args=None, train_data=None):
     config = GSConfig(config_args)
     # check this works
-    config._hidden_size = trial.suggest_int("hidden_size", 32, 1024, step=4)
+    params = suggest_parameters(trial, config)
+    for k, v in params.items():
+        setattr(config, f'_{k}', v)
 
     config._topk_model_to_save = 1
     config._save_model_path += f'/{trial.number}'
@@ -148,7 +164,8 @@ def train(trial, config_args=None, train_data=None):
 
     trainer.setup_task_tracker(tracker)
 
-    trainer.fit(train_loader=train_dataloader,
+    try:
+        trainer.fit(train_loader=train_dataloader,
                 val_loader=val_dataloader,
                 test_loader=test_dataloader,
                 num_epochs=config.num_epochs,
@@ -160,6 +177,9 @@ def train(trial, config_args=None, train_data=None):
                 max_grad_norm=config.max_grad_norm,
                 grad_norm_type=config.grad_norm_type,
                 optuna_trial=trial)
+    except torch.cuda.OutOfMemoryError:
+        trial.set_user_attr("OOM", True)
+        return float("inf")
 
     # TODO how do i also return the path for warm start?
     # return {'best_path': trainer.get_best_model_path()}
@@ -196,6 +216,12 @@ def main(config_args):
     config = GSConfig(config_args)
     config.verify_arguments(True)
 
+    tune_config = (Path(config.yaml_paths).parent / 'tune_space.json')
+    if tune_config.exists():
+        copy2(tune_config, Path(config.save_model_path).parent / 'tune_space.json')
+    else:
+        raise FileNotFoundError(f'tuner requires `tune_space.json` in same dir as the yaml config found at {config.yaml_paths}')
+
     gs.initialize(ip_config=config.ip_config, backend=config.backend,
                     local_rank=config.local_rank,
                     use_wholegraph=config.use_wholegraph_embed or False,
@@ -223,28 +249,18 @@ def main(config_args):
     ##########################################
     ##########################################
 
-    # ### tuner config
-    # search_space = {
-    #     "hidden_size": tune.choice([32, 64, 128, 256, 512, 1024]),
-    #     "fanout": tune.choice(["1,1", "2,1", "2,2"])
-    # }
-    
-    # TODO  IS NUM TRAINERS AVAILABLE HERE?
-    storage = f'sqlite:///{config.save_model_path}/study.db'.replace('./', '')
-    Path(storage).parent.mkdir(parents=True, exist_ok=True)
-    print('storage', storage)
     trainable = partial(train, config_args=config_args, train_data=train_data)
     study = optuna.create_study(
         direction="minimize",
         pruner=optuna.pruners.HyperbandPruner(),
-        # storage=storage
-        storage="sqlite:///.data/study_name.db"
-        # storage="sqlite:///.data/debug/output/gnn/save/study.db" # why this doesn't work is beyond me
-        # load_if_exists= True  # need some more work for this to be possible
+        study_name=config.study_name,
+        storage="sqlite:///.data/optuna.db",
+        load_if_exists= True  # need some more work for this to be possible
     )
+    # check study name
     study.optimize(
         trainable, 
-        n_trials=3, 
+        n_trials=config.study_n_trials,
         n_jobs=1, 
         catch=(Exception,)
     )

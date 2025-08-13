@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU
+from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU, GELU
 from torch.nn.functional import relu, dropout, gelu
 from torch.distributions.normal import Normal
 import numpy as np
@@ -80,42 +80,71 @@ class HMA(Module):
         self,
         *,
         in_features: int = 512, 
-        out_features: int,
-        version: int = 19,
+        out_features: int = 18761, #hma 19
+        activation_input: str = "linear",
+        attention_heads: int = 4,
+        dim_ffn: int = 414,
+        dim_input: int = 64,
+        dim_key: int = 8,
+        dim_model: int = 64,
+        dim_value: int = 8,
+        dropout_rate_attention: float = 0.45,
+        dropout_rate_bottleneck: float = 0.0,
+        dropout_rate_input: float = 0.25,
+        gaussian_noise_bottleneck: float = 0.0,
+        gaussian_noise_input: float = 0.0,
+        n_attention_steps: int = 2,
         **kwargs
     ):
         super().__init__()
-
-        if str(version) == '19':
-            hyperparameters = {'activation_input': 'linear', 'attention_heads': 5, 'dim_ffn': 648, 'dim_input': 128, 'dim_key': 5, 'dim_model': 14, 'dim_value': 8, 'dropout_rate_attention': 0.912, 'dropout_rate_bottleneck': 0.0, 'dropout_rate_input': 0.608, 'gaussian_noise_bottleneck': 0.0, 'gaussian_noise_input': 0.0, 'n_attention_steps': 5}
-        elif str(version) == '18':
-            hyperparameters = {'activation_input': 'linear', 'attention_heads': 5, 'dim_ffn': 414, 'dim_input': 256, 'dim_key': 6, 'dim_model': 10, 'dim_value': 4, 'dropout_rate_attention': 0.02, 'dropout_rate_bottleneck': 0.0, 'dropout_rate_input': 0.42, 'gaussian_noise_bottleneck': 0.0, 'gaussian_noise_input': 0.0, 'n_attention_steps': 5}
-        self.hyperparameters = hyperparameters
-
-        input_dimension = hyperparameters['dim_model'] * hyperparameters['dim_input'] # 14 * 128
+        self.in_features = in_features
+        self.out_features = out_features
+        self.activation_input = activation_input
+        self.attention_heads = attention_heads
+        self.dim_ffn = dim_ffn
+        self.dim_input = dim_input
+        self.dim_key = dim_key
+        self.dim_model = dim_model
+        self.dim_value = dim_value
+        self.dropout_rate_attention = dropout_rate_attention
+        self.dropout_rate_bottleneck = dropout_rate_bottleneck
+        self.dropout_rate_input = dropout_rate_input
+        self.gaussian_noise_bottleneck = gaussian_noise_bottleneck
+        self.gaussian_noise_input = gaussian_noise_input
+        self.n_attention_steps = n_attention_steps
+        self.input_dimension = self.dim_model * self.dim_input # 14 * 128
 
 
         # encoder
-        self.input_proj = Linear(in_features, input_dimension)
+        # add activation
+        self.activation_input
+        self.input_proj = Linear(in_features, self.input_dimension)
         # # transformations
         self.attention_layers = ModuleList([
-            AttentionBlock(**hyperparameters) for _ in range(hyperparameters['n_attention_steps'])
+            AttentionBlock(
+                dim_model=self.dim_model, 
+                dim_key=self.dim_key, 
+                dim_value=self.dim_value, 
+                dim_ffn=self.dim_ffn,
+                attention_heads=self.attention_heads, 
+                dropout_rate=self.dropout_rate_attention,
+            ) for _ in range(self.n_attention_steps)
         ])
 
         # decoder
-        self.decoder = Linear(input_dimension, out_features=out_features)
+        self.decoder = Linear(self.input_dimension, out_features=self.out_features)
 
     def forward(self, x, *args, **kwargs):
         x = self.input_proj(x)
 
-        x = dropout(x, p=self.hyperparameters['dropout_rate_input'], training=self.training) # (batch_size, 512)
+        x = dropout(x, p=self.dropout_rate_input, training=self.training) # (batch_size, 512)
 
         # # TRANSFORMATIONS
-        # # reshape to have dim_input "embeddings" with "dim_model" dimensions    
-        x = x.view(-1, self.hyperparameters['dim_input'], self.hyperparameters['dim_model']) # (batch_size, 128, 4)
-        
+        # # reshape to have dim_input "embeddings" with "dim_model" dimensions
+        x = x.view(-1, self.dim_input, self.dim_model) # (batch_size, 128, 4)
+
         # # normalize by sqrt(dim_model) as in the paper
-        x = x * (self.hyperparameters['dim_model'] ** .5)
+        x = x * (self.dim_model ** .5)
 
         # # pass through attn blocks
         for attn in self.attention_layers:

@@ -868,6 +868,10 @@ class GSConfig:
         _ = self.task_tracker
         _ = self.log_report_frequency
 
+        # Tune
+        _ = self.study_name
+        _ = self.study_n_trials
+
         _ = self.task_type
         # For classification/regression tasks.
         if self.task_type in [BUILTIN_TASK_NODE_CLASSIFICATION, BUILTIN_TASK_EDGE_CLASSIFICATION]:
@@ -2027,6 +2031,23 @@ class GSConfig:
             return self._resonate_encoder
         return None
 
+    @property
+    def study_name(self):
+        """The tuning study name"""
+        # pylint: disable=no-member
+        if hasattr(self, "_study_name"):
+            return self._study_name
+        return None
+
+    @property
+    def study_n_trials(self):
+        """The number of trials for the tuning study"""
+        # pylint: disable=no-member
+        if hasattr(self, "_study_n_trials"):
+            return self._study_n_trials
+        return 3
+
+    
     # END RESONATE ATTRS
 
     @property

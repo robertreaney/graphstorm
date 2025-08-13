@@ -20,6 +20,7 @@
     python3 -m graphstorm.run.launch <Launch args> YOUR_SCRIPT.py <Train/Infer args>
 """
 import argparse
+import datetime
 import json
 import logging
 import multiprocessing
@@ -1243,6 +1244,18 @@ def get_argument_parser():
         action="store_true",
         help="Indicate that a task is a hyperparameter tuning routine."
     )
+    # parser.add_argument(
+    #     "--study-name",
+    #     type=str,
+    #     help="The name of the Optuna study.",
+    #     default=datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # )
+    # parser.add_argument(
+    #     "--study-n-trials",
+    #     type=int,
+    #     help="The number of trials for the Optuna study.",
+    #     default=25
+    # )
     parser.add_argument(
         "--lm-encoder-only",
         action="store_true",

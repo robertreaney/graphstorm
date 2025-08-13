@@ -1142,7 +1142,8 @@ def set_encoder(model, g, config, train_task):
                     dropout=config.dropout,
                     force_no_embeddings=config.construct_feat_ntype,
                     use_node_encoder_residuals=config.use_node_encoder_residuals,
-                    encoder_type=config.resonate_encoder
+                    encoder_type=config.resonate_encoder,
+                    config=config
                     )
             else:
                 node_encoder = GSNodeEncoderInputLayer(g,

@@ -851,7 +851,8 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
                  force_no_embeddings=None,
                  cache_embed=False,
                  use_node_encoder_residuals=True,
-                 encoder_type='hma'):
+                 encoder_type='hma',
+                 config=None):
         super(ResonateNodeEncoderInputLayer, self).__init__(g)
         logging.warning(f"Using resonate node encoder layer! feat_size={feat_size} embed_size={embed_size} dropout={dropout} resid={use_node_encoder_residuals}")
 
@@ -924,9 +925,11 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
             if self.encoder_type == 'hma':
                 self.encoder[ntype] = HMA(
                     in_features=feat_size[ntype],
-                    out_features=self.embed_size
+                    out_features=self.embed_size,
+                    **{k.replace("_hma_", ""): v for k,v in config.__dict__.items() if 'hma' in k}
                 )
             elif self.encoder_type == 'moe':
+                raise NotImplementedError("Resonate MOE encoder outputs loss value for regularization. Need to incorporate that before MoE can be used")
                 self.encoder[ntype] = MoE(
                     input_size=feat_size[ntype], 
                     output_size=self.embed_size, 
