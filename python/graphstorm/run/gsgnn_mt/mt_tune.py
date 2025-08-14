@@ -18,7 +18,20 @@ from graphstorm.model_introspection import save_mermaid_diagram
 import optuna
 from functools import partial
 import json
-from datetime import datetime
+
+def suggest_parameters(trial, config):
+    search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
+
+    params = {
+        x[1]['name']: getattr(trial, f'suggest_{x[0]}')(**x[1]) for x in search_space
+    }
+    # set number of graph convolutions by fanout param if it varies
+    # for num_layers construct the fanout
+    fanout = params['fanout']
+    params['fanout'] = ','.join([str(fanout)] * params['num_layers'])
+    params['eval_fanout'] = params['fanout']
+
+    return params
 
 def init_model(config, train_data):
     model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm, config.use_model_residuals)
@@ -92,27 +105,22 @@ def init_evaluation(config, train_data):
 
     return task_evaluators, (train_dataloader, val_dataloader, test_dataloader)
 
-def suggest_parameters(trial, config):
-    search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
-    # search_space = [
-    #     ('int', {'name': 'hidden_size', 'low': 32, 'high': 1024, 'step': 4})
-    # ]
-    params = {
-        x[1]['name']: getattr(trial, f'suggest_{x[0]}')(**x[1]) for x in search_space
-    }
-    # set number of graph convolutions by fanout param if it varies
-    if 'fanout' in params:
-        params['num_layers'] = len(params['fanout'].split(','))
-
-    return params
-
-
 def train(trial, config_args=None, train_data=None):
     config = GSConfig(config_args)
     # check this works
     params = suggest_parameters(trial, config)
     for k, v in params.items():
         setattr(config, f'_{k}', v)
+
+    # set batch size for each task. hem needs half the batch size
+    if 'batch_size' in params:
+        for ii, task in enumerate(config.multi_tasks):
+            if 'hem' in task.task_id:
+                bs = int(params['batch_size'] / 2)
+            else:
+                bs = params['batch_size']
+            config.multi_tasks[ii].task_config._batch_size = bs
+            config.multi_tasks[ii].task_config._eval_batch_size = bs
 
     config._topk_model_to_save = 1
     config._save_model_path += f'/{trial.number}'
@@ -211,12 +219,13 @@ def log_model(config, model):
     except Exception as e:
         logging.warning("Failed to save model diagram: %s", e)
 
-def main(config_args):
+def main(config_args) -> None:
     ## main from training script graphstorm.
     config = GSConfig(config_args)
     config.verify_arguments(True)
 
     tune_config = (Path(config.yaml_paths).parent / 'tune_space.json')
+    Path(config.save_model_path).parent.mkdir(parents=True, exist_ok=True)
     if tune_config.exists():
         copy2(tune_config, Path(config.save_model_path).parent / 'tune_space.json')
     else:
@@ -262,7 +271,8 @@ def main(config_args):
         trainable, 
         n_trials=config.study_n_trials,
         n_jobs=1, 
-        catch=(Exception,)
+        catch=(Exception,),
+        timeout=60*60*4  # 4 hours
     )
     
     # #### LOAD BEST MODEL
