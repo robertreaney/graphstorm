@@ -512,7 +512,7 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
         self._decoder = None
         self._loss_fn = None
         self._optimizer = None
-        self._use_model_residuals = False
+        self._use_model_residuals = None
 
     def get_dense_params(self):
         """retrieve the all dense layers' parameters as a parameter list except for

@@ -368,7 +368,7 @@ def main(config_args):
                            node_feat_field=config.node_feat_name,
                            edge_feat_field=config.edge_feat_name,
                            lm_feat_ntypes=get_lm_ntypes(config.node_lm_configs))
-    model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm)
+    model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm, config.use_model_residuals)
     gs.gsf.set_encoder(model, train_data.g, config, train_task=True)
 
     tasks = config.multi_tasks

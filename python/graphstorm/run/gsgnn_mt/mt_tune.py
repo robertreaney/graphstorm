@@ -1,7 +1,8 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
 import torch as th
-import os
 import logging
+import os
+import math
 from shutil import copy2
 from pathlib import Path
 import graphstorm as gs
@@ -110,8 +111,20 @@ def update_config(config, params):
 
     # insert hyperparams into config object
     for k, v in params.items():
-            setattr(config, f'_{k}', v)
-        
+        setattr(config, f'_{k}', v)
+
+    # set dim_key and dim_value
+    for node_type in ['rcid', 'ip', 'hem']:
+        try:
+            # look for hma parameters for the query shape and set the key/value dim
+            dim_model = getattr(config, f'_hma_{node_type}_dim_model')
+            n_heads = getattr(config, f'_hma_{node_type}_attention_heads')
+            dim_key = math.floor(dim_model / n_heads)
+            setattr(config, f'_hma_{node_type}_dim_key', dim_key)
+            setattr(config, f'_hma_{node_type}_dim_value', dim_key)
+        except:
+            pass
+
     # set batch size for each task. hem needs half the batch size
     if 'batch_size' in params:
         for ii, task in enumerate(config.multi_tasks):
