@@ -1,5 +1,5 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
-import torch
+import torch as th
 import os
 import logging
 from shutil import copy2
@@ -18,6 +18,7 @@ from graphstorm.model_introspection import save_mermaid_diagram
 import optuna
 from functools import partial
 import json
+from graphstorm.utils import barrier
 
 def suggest_parameters(trial, config):
     search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
@@ -25,11 +26,6 @@ def suggest_parameters(trial, config):
     params = {
         x[1]['name']: getattr(trial, f'suggest_{x[0]}')(**x[1]) for x in search_space
     }
-    # set number of graph convolutions by fanout param if it varies
-    # for num_layers construct the fanout
-    fanout = params['fanout']
-    params['fanout'] = ','.join([str(fanout)] * params['num_layers'])
-    params['eval_fanout'] = params['fanout']
 
     return params
 
@@ -105,13 +101,17 @@ def init_evaluation(config, train_data):
 
     return task_evaluators, (train_dataloader, val_dataloader, test_dataloader)
 
-def train(trial, config_args=None, train_data=None):
-    config = GSConfig(config_args)
-    # check this works
-    params = suggest_parameters(trial, config)
-    for k, v in params.items():
-        setattr(config, f'_{k}', v)
+def update_config(config, params):
+    # set number of graph convolutions by fanout param if it varies
+    # for num_layers construct the fanout
+    fanout = params['fanout']
+    params['fanout'] = ','.join([str(fanout)] * params['num_layers'])
+    params['eval_fanout'] = params['fanout']
 
+    # insert hyperparams into config object
+    for k, v in params.items():
+            setattr(config, f'_{k}', v)
+        
     # set batch size for each task. hem needs half the batch size
     if 'batch_size' in params:
         for ii, task in enumerate(config.multi_tasks):
@@ -121,9 +121,33 @@ def train(trial, config_args=None, train_data=None):
                 bs = params['batch_size']
             config.multi_tasks[ii].task_config._batch_size = bs
             config.multi_tasks[ii].task_config._eval_batch_size = bs
+    return config
+
+def train(trial, config_args=None, train_data=None):
+    barrier()
+    config = GSConfig(config_args)
+
+    if gs.get_rank() == 0:
+        params = suggest_parameters(trial, config)
+        metadata = {
+            'params': params,
+            'trial_number': trial.number
+        }
+        # params = th.tensor([params[k] for k in keys], device=gs.utils.get_device())
+        Path('metadata.json').write_text(json.dumps(metadata))
+    else:
+        pass
+
+    barrier()
+
+    metadata = json.loads(Path('metadata.json').read_text())
+    params = metadata['params']
+    trial_number = metadata['trial_number']
+    
+    config = update_config(config, params)
 
     config._topk_model_to_save = 1
-    config._save_model_path += f'/{trial.number}'
+    config._save_model_path += f'/{trial_number}'
     # restore = next(Path(config._save_model_path).glob("epoch-*"), None)
     # if restore is not None:
         # config._restore_model_path = restore.as_posix()
@@ -175,7 +199,7 @@ def train(trial, config_args=None, train_data=None):
     try:
         trainer.fit(train_loader=train_dataloader,
                 val_loader=val_dataloader,
-                test_loader=test_dataloader,
+                # test_loader=test_dataloader,
                 num_epochs=config.num_epochs,
                 save_model_path=save_model_path,
                 use_mini_batch_infer=config.use_mini_batch_infer,
@@ -184,14 +208,17 @@ def train(trial, config_args=None, train_data=None):
                 freeze_input_layer_epochs=config.freeze_lm_encoder_epochs,
                 max_grad_norm=config.max_grad_norm,
                 grad_norm_type=config.grad_norm_type,
+                is_optuna_run=True,
                 optuna_trial=trial)
-    except torch.cuda.OutOfMemoryError:
+    except th.cuda.OutOfMemoryError:
         trial.set_user_attr("OOM", True)
         return float("inf")
 
     # TODO how do i also return the path for warm start?
     # return {'best_path': trainer.get_best_model_path()}
-    return trainer.evaluator._get_early_stop_score(trainer.evaluator.best_val_score)
+    barrier()
+    if gs.get_rank() == 0:
+        return trainer.evaluator._get_early_stop_score(trainer.evaluator.best_val_score)
 
 def log_model(config, model):
     try:
@@ -257,35 +284,58 @@ def main(config_args) -> None:
     ##########################################
     ##########################################
     ##########################################
+    if gs.get_rank() == 0:
+        study = optuna.create_study(
+            direction="minimize",
+            pruner=optuna.pruners.HyperbandPruner(),
+            study_name=config.study_name,
+            storage="sqlite:///.data/optuna.db",
+            load_if_exists= True  # need some more work for this to be possible
+        )
 
     trainable = partial(train, config_args=config_args, train_data=train_data)
-    study = optuna.create_study(
-        direction="minimize",
-        pruner=optuna.pruners.HyperbandPruner(),
-        study_name=config.study_name,
-        storage="sqlite:///.data/optuna.db",
-        load_if_exists= True  # need some more work for this to be possible
-    )
-    # check study name
-    study.optimize(
-        trainable, 
-        n_trials=config.study_n_trials,
-        n_jobs=1, 
-        catch=(Exception,),
-        timeout=60*60*4  # 4 hours
-    )
-    
+        # check study name
+    # study.optimize(
+    #     trainable, 
+    #     n_trials=config.study_n_trials,
+    #     n_jobs=1, 
+    #     catch=(Exception,),
+    #     timeout=60*60*3  # 3 hours
+    # )
+
+    for ii in range(config.study_n_trials):
+        if gs.get_rank() == 0:
+            trial = study.ask()
+        else:
+            trial = None
+        
+        val = trainable(trial)
+
+        if gs.get_rank() == 0:
+            study.tell(trial, val)
+
     # #### LOAD BEST MODEL
     # # TODO sort furthest model
-    restore_path = next(Path(config.save_model_path + f'/{study.best_trial.number}').glob("*epoch*")).as_posix()
-    for k, v in study.best_params.items():
-        setattr(config, f'_{k}', v)
+    best_metadata_path = Path(config.save_model_path) / 'best_metadata.json'
+    if gs.get_rank() == 0:
+        metadata = {
+            'trial_number': study.best_trial.number,
+            'params': study.best_params
+        }
+        best_metadata_path.write_text(json.dumps((metadata)))
+
+    barrier()
+    metadata = json.loads(best_metadata_path.read_text())
+    restore_path = next(Path(config.save_model_path + f'/{metadata["trial_number"]}').glob("*epoch*")).as_posix()
+
+    config = update_config(config, metadata['params'])
 
     model = init_model(config, train_data)
     model.restore_model(restore_path, model_layer_to_load=config.restore_model_layers)
     model = model.to(get_device())
 
-    log_model(config, model)
+    if gs.get_rank() == 0:
+        log_model(config, model)
 
     ### INFERENCE CODE
 
