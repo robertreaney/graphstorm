@@ -1,3 +1,4 @@
+import logging
 import torch
 import torch.nn as nn
 from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU, GELU
@@ -293,8 +294,7 @@ class MoE(nn.Module):
     noisy_gating: a boolean
     k: an integer - how many experts to use for each batch element
     """
-
-    def __init__(self, input_size, output_size, num_experts, hidden_size, noisy_gating=True, k=4):
+    def __init__(self, input_size, output_size, num_experts=16, hidden_size=1024, noisy_gating=True, k=4, hidden_size_factor=None):
         super(MoE, self).__init__()
         self.noisy_gating = noisy_gating
         self.num_experts = num_experts
@@ -302,6 +302,10 @@ class MoE(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.k = k
+        if hidden_size_factor is not None:
+            self.hidden_size = int(hidden_size_factor * input_size)
+            logging.warning("MoE node encoder arg hidden_size_factor is not None. Default will ignore hidden_size and use this instead.")
+            
         # instantiate experts
         self.experts = nn.ModuleList([MLP(self.input_size, self.output_size, self.hidden_size) for i in range(self.num_experts)])
         self.w_gate = nn.Parameter(torch.zeros(input_size, num_experts), requires_grad=True)
@@ -433,4 +437,7 @@ class MoE(nn.Module):
         gates = dispatcher.expert_to_gates()
         expert_outputs = [self.experts[i](expert_inputs[i]) for i in range(self.num_experts)]
         y = dispatcher.combine(expert_outputs)
-        return y, loss
+        
+        if self.training:
+            return y, loss
+        return y

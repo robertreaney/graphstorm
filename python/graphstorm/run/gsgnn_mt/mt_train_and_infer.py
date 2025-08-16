@@ -164,7 +164,7 @@ def train(config_args, train_data):
 
     trainer.fit(train_loader=train_dataloader,
                 val_loader=val_dataloader,
-                test_loader=test_dataloader,
+                # test_loader=train_dataloader,
                 num_epochs=config.num_epochs,
                 save_model_path=save_model_path,
                 use_mini_batch_infer=config.use_mini_batch_infer,

@@ -342,6 +342,7 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
         assert task_id in self.task_pool, \
             f"Unknown task: {task_id} in multi-task learning." \
             f"Existing tasks are {self.task_pool.keys()}"
+        additional_loss = 0
 
         # message passing graph, node features, edge features, seed nodes
         blocks, node_feats, _, input_nodes = encoder_data
@@ -397,6 +398,8 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
                         blocks, node_feats, input_nodes)
             else:
                 encode_embs = self.compute_embed_step(blocks, node_feats, input_nodes)
+                if isinstance(encode_embs, tuple):
+                    encode_embs, additional_loss = encode_embs
 
         # Call emb normalization.
         encode_embs = self.minibatch_normalize_task_node_embs(task_id, encode_embs)
@@ -416,7 +419,7 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
             ntype_logits = task_decoder(emb)
             pred_loss = loss_func(ntype_logits, ntype_labels)
 
-            return pred_loss
+            return pred_loss + additional_loss
         elif task_type in [BUILTIN_TASK_EDGE_CLASSIFICATION, BUILTIN_TASK_EDGE_REGRESSION]:
             batch_graph, target_edge_feats, labels = decoder_data
             assert len(labels) == 1, \

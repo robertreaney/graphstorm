@@ -895,8 +895,14 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
         dict of Tensors: The GNN embeddings.
         """
         device = blocks[0].device
+        additional_loss = 0
         if self.node_input_encoder is not None:
+            # right here, MoE would output a tuple of (embs, loss) instead of a tensor
             node_input_embs = self.node_input_encoder(input_nfeats, input_nodes)
+            for k, v in node_input_embs.items():
+                if isinstance(v, tuple):
+                    additional_loss += v[1]
+                    node_input_embs[k] = v[0]
             node_input_embs = {name: emb.to(device) for name, emb in node_input_embs.items()}
         else:
             node_input_embs = input_nfeats
@@ -936,6 +942,8 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
                     gnn_embs = {k: _apply(v, node_input_embs[k], k) for k, v in gnn_embs.items()}
         else:
             gnn_embs = node_input_embs
+        if additional_loss > 0:
+            return gnn_embs, additional_loss
         return gnn_embs
 
     def save_dense_model(self, model_path):

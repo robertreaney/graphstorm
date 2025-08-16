@@ -115,6 +115,7 @@ def update_config(config, params):
 
     # set dim_key and dim_value
     for node_type in ['rcid', 'ip', 'hem']:
+        # if it finds hma nodes, fill in
         try:
             # look for hma parameters for the query shape and set the key/value dim
             dim_model = getattr(config, f'_hma_{node_type}_dim_model')
@@ -124,6 +125,8 @@ def update_config(config, params):
             setattr(config, f'_hma_{node_type}_dim_value', dim_key)
         except:
             pass
+
+        # try/except block for moe-specific logic
 
     # set batch size for each task. hem needs half the batch size
     if 'batch_size' in params:

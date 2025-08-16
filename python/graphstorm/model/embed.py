@@ -929,14 +929,10 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
                     **{k.replace("_hma_", "").replace(f"{ntype}_", ""): v for k,v in config.__dict__.items() if 'hma' in k}
                 )
             elif self.encoder_type == 'moe':
-                raise NotImplementedError("Resonate MOE encoder outputs loss value for regularization. Need to incorporate that before MoE can be used")
                 self.encoder[ntype] = MoE(
                     input_size=feat_size[ntype], 
                     output_size=self.embed_size, 
-                    num_experts=16, 
-                    hidden_size=1024, 
-                    k=4, 
-                    noisy_gating=True
+                    **{k.replace("_moe_", "").replace(f"{ntype}_", ""): v for k,v in config.__dict__.items() if 'moe' in k}
                 )
 
     def _init_node_embeddings(self, g, ntype, embed_size):
