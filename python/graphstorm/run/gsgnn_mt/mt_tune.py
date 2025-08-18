@@ -17,8 +17,10 @@ from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, g
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
 from graphstorm.model_introspection import save_mermaid_diagram
 import optuna
+from optuna.integration import TorchDistributedTrial
 from functools import partial
 import json
+from torch.distributed import broadcast
 from graphstorm.utils import barrier
 
 def suggest_parameters(trial, config):
@@ -107,7 +109,8 @@ def update_config(config, params):
     # for num_layers construct the fanout
     fanout = params['fanout']
     params['fanout'] = ','.join([str(fanout)] * params['num_layers'])
-    params['eval_fanout'] = params['fanout']
+    # params['eval_fanout'] = params['fanout']
+    params['eval_fanout'] = ','.join(['10'] * params['num_layers'])
 
     # insert hyperparams into config object
     for k, v in params.items():
@@ -133,30 +136,37 @@ def update_config(config, params):
             else:
                 bs = params['batch_size']
             config.multi_tasks[ii].task_config._batch_size = bs
-            config.multi_tasks[ii].task_config._eval_batch_size = bs
+            config.multi_tasks[ii].task_config._eval_batch_size = int(bs / 8)
     return config
 
-def train(trial, config_args=None, train_data=None):
+def train(single_trial, config_args=None, train_data=None):
+    barrier()
+    trial = TorchDistributedTrial(single_trial)
+    # broadcast the trial number
+    number = th.tensor([int(trial.number)], device=get_device())
+    broadcast(number, src=0)
+
     config = GSConfig(config_args)
 
-    if gs.get_rank() == 0:
-        params = suggest_parameters(trial, config)
-        metadata = {
-            'params': params,
-            'trial_number': trial.number
-        }
-        # params = th.tensor([params[k] for k in keys], device=gs.utils.get_device())
-        Path('metadata.json').write_text(json.dumps(metadata))
+    params = suggest_parameters(trial, config)
+    # if gs.get_rank() == 0:
+    #     params = suggest_parameters(trial, config)
+    #     metadata = {
+    #         'params': params,
+    #         'trial_number': trial.number
+    #     }
+    #     # params = th.tensor([params[k] for k in keys], device=gs.utils.get_device())
+    #     Path('metadata.json').write_text(json.dumps(metadata))
 
-    barrier()
-    metadata = json.loads(Path('metadata.json').read_text())
-    params = metadata['params']
-    trial_number = metadata['trial_number']
+    # barrier()
+    # metadata = json.loads(Path('metadata.json').read_text())
+    # params = metadata['params']
+    # trial_number = metadata['trial_number']
     
     config = update_config(config, params)
 
-    config._topk_model_to_save = 1
-    config._save_model_path += f'/{trial_number}'
+    config._topk_model_to_save = 3
+    config._save_model_path += f'/{int(number.item())}'
     # restore = next(Path(config._save_model_path).glob("epoch-*"), None)
     # if restore is not None:
         # config._restore_model_path = restore.as_posix()
@@ -182,14 +192,14 @@ def train(trial, config_args=None, train_data=None):
     else:
         save_model_path = None
 
-    # save the generating configuration for this experiment
-    Path(save_model_path).mkdir(parents=True, exist_ok=True)
-    copy2(config.yaml_paths, Path(save_model_path) / 'config.yaml')
 
     tracker = gs.create_builtin_task_tracker(config)
     if gs.get_rank() == 0:
         tracker.log_params(config.__dict__)
-    
+        # save the generating configuration for this experiment
+        Path(save_model_path).mkdir(parents=True, exist_ok=True)
+        copy2(config.yaml_paths, Path(save_model_path) / 'config.yaml')
+        
     trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
 
     if not config.no_validation:
@@ -220,25 +230,29 @@ def train(trial, config_args=None, train_data=None):
                 is_optuna_run=True,
                 optuna_trial=trial)
     except th.cuda.OutOfMemoryError:
-        if gs.get_rank() == 0:
-            trial.set_user_attr("OOM", True)
-            trial.state = optuna.trial.TrialState.COMPLETE
-            return float("inf")
+        # if gs.get_rank() == 0:
+        trial.set_user_attr("OOM", True)
+            # trial.state = optuna.trial.TrialState.COMPLETE
+            # return float("inf")
+        th.cuda.empty_cache()
+        raise
     except optuna.exceptions.TrialPruned:
-        if gs.get_rank() == 0:
-            trial.set_user_attr("Pruned", True)
-            trial.state = optuna.trial.TrialState.PRUNED
-            return None
+        # if gs.get_rank() == 0:
+        trial.set_user_attr("Pruned", True)
+            # trial.state = optuna.trial.TrialState.PRUNED
+            # return None
+        raise
     except Exception as e:
-        if gs.get_rank() == 0:
-            trial.set_user_attr("Exception", str(e))
-            trial.state = optuna.trial.TrialState.FAIL
-            return None
+        # if gs.get_rank() == 0:
+        trial.set_user_attr("Exception", str(e))
+            # trial.state = optuna.trial.TrialState.FAIL
+            # return None
+        raise
     finally:
         barrier()
         
     if gs.get_rank() == 0:
-        trial.state = optuna.trial.TrialState.COMPLETE
+        # trial.state = optuna.trial.TrialState.COMPLETE
         return trainer.evaluator._get_early_stop_score(trainer.evaluator.best_val_score)
     return
 
@@ -306,6 +320,8 @@ def main(config_args) -> None:
     ##########################################
     ##########################################
     ##########################################
+    trainable = partial(train, config_args=config_args, train_data=train_data)
+    
     if gs.get_rank() == 0:
         study = optuna.create_study(
             direction="minimize",
@@ -315,20 +331,20 @@ def main(config_args) -> None:
             load_if_exists= True  # need some more work for this to be possible
         )
 
-    trainable = partial(train, config_args=config_args, train_data=train_data)
-
-    for ii in range(config.study_n_trials):
-        if gs.get_rank() == 0:
-            trial = study.ask()
-        else:
-            trial = None
-        
-        val = trainable(trial)
-
-        if gs.get_rank() == 0:
-            if trial.state is None:
-                trial.state = optuna.trial.TrialState.FAIL
-            study.tell(trial, val, trial.state)
+        study.optimize(
+            trainable,
+            n_trials=config.study_n_trials,
+            n_jobs=1,
+            catch=(th.cuda.OutOfMemoryError,)
+        )
+    else:
+        for _ in range(config.study_n_trials):
+            try:
+                trainable(None)
+            except optuna.exceptions.TrialPruned:
+                pass
+            except th.cuda.OutOfMemoryError:
+                pass
 
     # #### LOAD BEST MODEL
     # # TODO sort furthest model

@@ -498,7 +498,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
 
             # ------- end of an epoch -------
 
-            barrier()
+            # barrier()
             epoch_time = time.time() - epoch_start
             if get_rank() == 0:
                 logging.info("Epoch %d take %.3f seconds", epoch, epoch_time)
@@ -512,10 +512,9 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
                     early_stop = True
                     
                 if is_optuna_run:
-                    if gs.get_rank() == 0:
-                        optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
-                        if optuna_trial.should_prune():
-                            raise optuna.TrialPruned()
+                    optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
+                    if optuna_trial.should_prune():
+                        raise optuna.TrialPruned()
 
 
             # After each epoch, check to save the top k models.
@@ -524,7 +523,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
             self.save_topk_models(model, epoch, None, val_score, save_model_path)
             rt_profiler.print_stats()
             # make sure saving model finishes properly before the main process kills this training
-            barrier()
+            # barrier()
 
             if early_stop is True:
                 break
