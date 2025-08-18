@@ -115,7 +115,6 @@ def update_config(config, params):
 
     # set dim_key and dim_value
     for node_type in ['rcid', 'ip', 'hem']:
-        # if it finds hma nodes, fill in
         try:
             # look for hma parameters for the query shape and set the key/value dim
             dim_model = getattr(config, f'_hma_{node_type}_dim_model')
@@ -125,8 +124,6 @@ def update_config(config, params):
             setattr(config, f'_hma_{node_type}_dim_value', dim_key)
         except:
             pass
-
-        # try/except block for moe-specific logic
 
     # set batch size for each task. hem needs half the batch size
     if 'batch_size' in params:
@@ -140,7 +137,6 @@ def update_config(config, params):
     return config
 
 def train(trial, config_args=None, train_data=None):
-    barrier()
     config = GSConfig(config_args)
 
     if gs.get_rank() == 0:
@@ -151,11 +147,8 @@ def train(trial, config_args=None, train_data=None):
         }
         # params = th.tensor([params[k] for k in keys], device=gs.utils.get_device())
         Path('metadata.json').write_text(json.dumps(metadata))
-    else:
-        pass
 
     barrier()
-
     metadata = json.loads(Path('metadata.json').read_text())
     params = metadata['params']
     trial_number = metadata['trial_number']
@@ -227,14 +220,27 @@ def train(trial, config_args=None, train_data=None):
                 is_optuna_run=True,
                 optuna_trial=trial)
     except th.cuda.OutOfMemoryError:
-        trial.set_user_attr("OOM", True)
-        return float("inf")
-
-    # TODO how do i also return the path for warm start?
-    # return {'best_path': trainer.get_best_model_path()}
-    barrier()
+        if gs.get_rank() == 0:
+            trial.set_user_attr("OOM", True)
+            trial.state = optuna.trial.TrialState.COMPLETE
+            return float("inf")
+    except optuna.exceptions.TrialPruned:
+        if gs.get_rank() == 0:
+            trial.set_user_attr("Pruned", True)
+            trial.state = optuna.trial.TrialState.PRUNED
+            return None
+    except Exception as e:
+        if gs.get_rank() == 0:
+            trial.set_user_attr("Exception", str(e))
+            trial.state = optuna.trial.TrialState.FAIL
+            return None
+    finally:
+        barrier()
+        
     if gs.get_rank() == 0:
+        trial.state = optuna.trial.TrialState.COMPLETE
         return trainer.evaluator._get_early_stop_score(trainer.evaluator.best_val_score)
+    return
 
 def log_model(config, model):
     try:
@@ -310,14 +316,6 @@ def main(config_args) -> None:
         )
 
     trainable = partial(train, config_args=config_args, train_data=train_data)
-        # check study name
-    # study.optimize(
-    #     trainable, 
-    #     n_trials=config.study_n_trials,
-    #     n_jobs=1, 
-    #     catch=(Exception,),
-    #     timeout=60*60*3  # 3 hours
-    # )
 
     for ii in range(config.study_n_trials):
         if gs.get_rank() == 0:
@@ -328,7 +326,9 @@ def main(config_args) -> None:
         val = trainable(trial)
 
         if gs.get_rank() == 0:
-            study.tell(trial, val)
+            if trial.state is None:
+                trial.state = optuna.trial.TrialState.FAIL
+            study.tell(trial, val, trial.state)
 
     # #### LOAD BEST MODEL
     # # TODO sort furthest model
