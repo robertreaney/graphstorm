@@ -84,17 +84,17 @@ class HMA(Module):
         out_features: int = 18761, #hma 19
         activation_input: str = "linear",
         attention_heads: int = 4,
-        dim_ffn: int = 414,
-        dim_input: int = 64,
-        dim_key: int = 8,
-        dim_model: int = 64,
+        dim_ffn: int = 648,
+        dim_input: int = 128,
+        dim_key: int = 5,
+        dim_model: int = 14,
         dim_value: int = 8,
         dropout_rate_attention: float = 0.45,
         dropout_rate_bottleneck: float = 0.0,
         dropout_rate_input: float = 0.25,
         gaussian_noise_bottleneck: float = 0.0,
         gaussian_noise_input: float = 0.0,
-        n_attention_steps: int = 2,
+        n_attention_steps: int = 5,
         **kwargs
     ):
         super().__init__()
@@ -294,7 +294,7 @@ class MoE(nn.Module):
     noisy_gating: a boolean
     k: an integer - how many experts to use for each batch element
     """
-    def __init__(self, input_size, output_size, num_experts=16, hidden_size=1024, noisy_gating=True, k=4, hidden_size_factor=None):
+    def __init__(self, input_size, output_size, num_experts=16, hidden_size=1024, noisy_gating=True, k=4, hidden_size_factor=None, loss_coef=1e-2, **kwargs):
         super(MoE, self).__init__()
         self.noisy_gating = noisy_gating
         self.num_experts = num_experts
@@ -302,6 +302,7 @@ class MoE(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.k = k
+        self.loss_coef = loss_coef
         if hidden_size_factor is not None:
             self.hidden_size = int(hidden_size_factor * input_size)
             logging.warning("MoE node encoder arg hidden_size_factor is not None. Default will ignore hidden_size and use this instead.")
@@ -413,7 +414,7 @@ class MoE(nn.Module):
             load = self._gates_to_load(gates)
         return gates, load
 
-    def forward(self, x, loss_coef=1e-2):
+    def forward(self, x):
         """Args:
         x: tensor shape [batch_size, input_size]
         train: a boolean scalar.
@@ -430,7 +431,7 @@ class MoE(nn.Module):
         importance = gates.sum(0)
         #
         loss = self.cv_squared(importance) + self.cv_squared(load)
-        loss *= loss_coef
+        loss *= self.loss_coef
 
         dispatcher = SparseDispatcher(self.num_experts, gates)
         expert_inputs = dispatcher.dispatch(x)

@@ -498,7 +498,7 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
 
             # ------- end of an epoch -------
 
-            # barrier()
+            barrier()
             epoch_time = time.time() - epoch_start
             if get_rank() == 0:
                 logging.info("Epoch %d take %.3f seconds", epoch, epoch_time)
