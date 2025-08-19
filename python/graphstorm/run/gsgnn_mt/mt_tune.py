@@ -24,6 +24,7 @@ from functools import partial
 import json
 from torch.distributed import broadcast, all_reduce, ReduceOp
 from graphstorm.utils import barrier, is_distributed
+import yaml
 
 
 
@@ -151,6 +152,7 @@ def update_config(config, params):
                 config.multi_tasks[ii].task_config._batch_size = params['batch_size']
                 config.multi_tasks[ii].task_config._eval_batch_size = 16
     return config
+    
 
 def train(single_trial, config_args=None, train_data=None):
     barrier()
@@ -199,12 +201,26 @@ def train(single_trial, config_args=None, train_data=None):
     if gs.get_rank() == 0:
         tracker.log_params(config.__dict__)
         # save the generating configuration for this experiment
-        Path(save_model_path).mkdir(parents=True, exist_ok=True)
-        copy2(config.yaml_paths, Path(save_model_path) / 'config.yaml')
-        # TODO save trial parameters here
-        trial_params = {k: v for k, v in params.items() if k.startswith('trial_')}
         with open(Path(save_model_path) / 'trial_params.json', 'w') as f:
-            json.dump(trial_params, f)
+            json.dump(params, f, indent=4)
+
+        Path(save_model_path).mkdir(parents=True, exist_ok=True)
+        # update the yaml
+        config_data = yaml.safe_load(Path(config.yaml_paths).read_text())
+        # batch_size, lr go in hyperparam
+        hyper_params = {k: v for k,v in params.items() if k in ['batch_size', 'lr']}
+        config_data['gsf'].get('hyperparam', dict()).update(hyper_params)
+
+        # hidden_size, num_layers, fanout, eval_fanout go in gnn
+        gnn_params = {k: v for k,v in params.items() if k in ['hidden_size', 'num_layers', 'fanout', 'eval_fanout']}
+        config_data['gsf'].get('gnn', dict()).update(gnn_params)
+
+        # hma_* goes in node_encoder_params
+        node_encoder_params = {k: v for k,v in params.items() if 'hma' in k or 'moe' in k}
+        config_data['gsf'].get('node_encoder_params', dict()).update(node_encoder_params)
+
+        # save
+        (Path(save_model_path) / 'config.yaml').write_text(yaml.dump(config_data))        
 
     trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
 
