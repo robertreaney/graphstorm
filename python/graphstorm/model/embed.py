@@ -994,8 +994,15 @@ class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
                 embs[ntype] = emb
 
         def _apply(t, h):
-            h = self.encoder[t](h)
-            return h
+            chunk_size = 5000
+            B = h.shape[0]
+            if B <= chunk_size:
+                return self.encoder[t](h)
+            
+            outs = []
+            for i in range(0, h.shape[0], chunk_size):
+                outs.append(self.encoder[t](h[i:i+chunk_size]))
+            return th.cat(outs, dim=0)
 
         embs = {ntype: _apply(ntype, h) for ntype, h in embs.items()}
 

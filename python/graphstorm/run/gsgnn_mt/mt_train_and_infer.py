@@ -1,5 +1,8 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
 import os
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 import logging
 from shutil import copy2
 from pathlib import Path
@@ -16,7 +19,7 @@ from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, creat
 from graphstorm.model_introspection import save_mermaid_diagram
 
 # FMT = "%(asctime)s %(levelname)s %(message)s"
-# logging.basicConfig(format=FMT, level=logging.INFO)
+# logging.basicConfig(format=FMT, level=logging.DEBUG)
 
 # PART_CONFIG = ".data/debug/graph/debug.json"
 # CONFIG_FILE = "experiments/debug/gnn.yaml"
