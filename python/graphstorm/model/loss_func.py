@@ -17,6 +17,7 @@
 """
 import logging
 import warnings
+from pathlib import Path
 
 import torch as th
 from torch import nn
@@ -117,7 +118,12 @@ class MaskedClassifyLossFunc(GSLayer):
         self.multilabel = multilabel
         self.true = None
         self.false = None
-        
+        self.multilabel_weights = None
+        p = Path('.data/pos_weight.pt')
+        if Path(p).exists() and multilabel_weights is not None:
+            logging.warning('Loading multilabel weights!')
+            self.multilabel_weights = th.load(p)
+
         # find values of true/false from config
         for item in label_mask:
             key, value = item.split(':')
@@ -127,11 +133,7 @@ class MaskedClassifyLossFunc(GSLayer):
             )
             setattr(self, key.strip(), int(value.strip()))
 
-        if multilabel:
-            self.loss_fn = nn.BCEWithLogitsLoss(weight=imbalance_class_weights,
-                                                pos_weight=multilabel_weights)
-        else:
-            self.loss_fn = nn.CrossEntropyLoss(weight=imbalance_class_weights)
+        self.loss_fn = nn.BCEWithLogitsLoss(reduction='none')
 
     def forward(self, logits, labels):
         """ The forward function.
@@ -161,15 +163,22 @@ class MaskedClassifyLossFunc(GSLayer):
 
         labels = labels[mask]
         logits = logits[mask]
+        
+        # repeat this vector N rows
+        if self.multilabel_weights is not None:
+            w = self.multilabel_weights.repeat(labels.size(0),1).to(labels.device)
+            w = th.where(
+                labels == true_val,
+                1 + th.log1p(input=w),  # where positive use positive weight
+                1   # where negative dont weight
+            )
 
-        if self.multilabel:
             # BCEWithLogitsLoss wants labels be th.Float
             loss = self.loss_fn(logits, labels.type(th.float32))
-            return loss
+            return (loss * w[mask]).sum() / w[mask].sum() # normalize by sum to stabilize training
+    
         else:
-            
-            loss = self.loss_fn(logits, labels.long())
-            return loss
+            return self.loss_fn(logits, labels.type(th.float32)).mean()
 
     @property
     def in_dims(self):
