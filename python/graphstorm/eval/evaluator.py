@@ -2282,7 +2282,7 @@ class GSgnnMultiTaskEvaluator(GSgnnBaseEvaluator, GSgnnMultiTaskEvalInterface):
                 val_preds, val_labels = eval_task[0] \
                     if eval_task[0] is not None else (None, None)
                 test_preds, test_labels = eval_task[1] \
-                    if eval_task[0] is not None else (None, None)
+                    if eval_task[1] is not None else (None, None)
                 val_score, test_score = task_evaluator.evaluate(
                     val_preds, test_preds, val_labels, test_labels, total_iters)
             elif isinstance(task_evaluator, GSgnnLPRankingEvalInterface):

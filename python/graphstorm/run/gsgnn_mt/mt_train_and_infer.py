@@ -1,6 +1,8 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
 import os
 import os
+
+from graphstorm.inference.resonate_infer import ResonateInferrer
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import logging
@@ -11,9 +13,9 @@ from graphstorm.config import GSConfig, get_argument_parser
 from graphstorm.config import BUILTIN_TASK_LINK_PREDICTION
 from graphstorm.dataloading import GSgnnMultiTaskDataLoader, GSgnnData
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import GSgnnMultiTaskLearningTrainer
+from graphstorm.trainer import ResonateMultiTaskTrainer, GSgnnMultiTaskLearningTrainer
 from graphstorm.eval import GSgnnMultiTaskEvaluator
-from graphstorm.inference import GSgnnMultiTaskLearningInferrer
+from graphstorm.inference import GSgnnMultiTaskLearningInferrer, ResonateInferrer
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
 from graphstorm.model_introspection import save_mermaid_diagram
@@ -105,7 +107,8 @@ def train(config_args, train_data):
                             sparse_optimizer_lr=config.sparse_optimizer_lr,
                             weight_decay=config.wd_l2norm,
                             lm_lr=config.lm_tune_lr)
-    trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
                                             task_evaluators,
@@ -177,7 +180,7 @@ def train(config_args, train_data):
                 max_grad_norm=config.max_grad_norm,
                 grad_norm_type=config.grad_norm_type)
 
-    return model, task_evaluators, test_dataloader, trainer.get_best_model_path()
+    return model, task_evaluators, test_dataloader, trainer
 
 def main(config_args):
     ## main from training script graphstorm.
@@ -216,16 +219,19 @@ def main(config_args):
     ##########################################
     ##########################################
 
-    model, task_evaluators, test_dataloader, best_path = train(config_args, train_data)
+    model, task_evaluators, test_dataloader, trainer = train(config_args, train_data)
 
 
     #### LOAD BEST MODEL
     # TODO fetch best path here
-    model.restore_model(best_path, model_layer_to_load=config.restore_model_layers)
+    model.restore_model(trainer.get_best_model_path(), model_layer_to_load=config.restore_model_layers)
     model = model.to(get_device())
+    # logging.info('RESERVED SET PERFORMANCE FOR BEST MODEL')
+    # val_result = trainer.eval(model, test_dataloader, None, -1)
 
     ### INFERENCE CODE
-    infer = GSgnnMultiTaskLearningInferrer(model)
+    infer = ResonateInferrer(model)
+    # infer = GSgnnMultiTaskLearningInferrer(model)
 
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)
@@ -234,16 +240,12 @@ def main(config_args):
     infer.setup_device(device=get_device())
     infer.infer(train_data,
                 test_dataloader, 
-                None, 
-                None, 
-                None,
                 save_embed_path=config.save_embed_path,
                 save_prediction_path=config.save_prediction_path,
-                use_mini_batch_infer=config.use_mini_batch_infer,
                 node_id_mapping_file=config.node_id_mapping_file,
-                edge_id_mapping_file=config.edge_id_mapping_file,
                 return_proba=config.return_proba,
                 save_embed_format=config.save_embed_format)
+
     
 def generate_parser():
     """ Generate an argument parser
