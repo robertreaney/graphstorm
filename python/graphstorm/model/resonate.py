@@ -81,7 +81,7 @@ class HMA(Module):
         self,
         *,
         in_features: int = 512, 
-        out_features: int = 18761, #hma 19
+        out_features: int = 18767, #hma 19
         activation_input: str = "linear",
         attention_heads: int = 4,
         dim_ffn: int = 648,

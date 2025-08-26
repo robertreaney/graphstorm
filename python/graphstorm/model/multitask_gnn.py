@@ -498,7 +498,7 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
         if task_type in [BUILTIN_TASK_NODE_CLASSIFICATION, BUILTIN_TASK_NODE_REGRESSION]:
             # TODO i think thisll work if we filter with task_id node. what does this look like normally?
             if len(encode_embs) != 1:
-                logging.warning('RESONATE filtering predict step embeddings to only target. this may cause unintended consequences.')
+                # logging.warning('RESONATE filtering predict step embeddings to only target. this may cause unintended consequences.')
                 encode_embs = {k: v for k, v in encode_embs.items() if k in task_id}
             assert len(encode_embs) == 1, \
                 "In multi-task learning, only support do prediction " \

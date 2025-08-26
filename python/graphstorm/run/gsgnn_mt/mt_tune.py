@@ -12,9 +12,9 @@ from graphstorm.config import GSConfig, get_argument_parser
 from graphstorm.config import BUILTIN_TASK_LINK_PREDICTION
 from graphstorm.dataloading import GSgnnMultiTaskDataLoader, GSgnnData
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import GSgnnMultiTaskLearningTrainer
+from graphstorm.trainer import GSgnnMultiTaskLearningTrainer, ResonateMultiTaskTrainer
 from graphstorm.eval import GSgnnMultiTaskEvaluator
-from graphstorm.inference import GSgnnMultiTaskLearningInferrer
+from graphstorm.inference import GSgnnMultiTaskLearningInferrer, ResonateInferrer
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
 from graphstorm.model_introspection import save_mermaid_diagram
@@ -37,7 +37,7 @@ def suggest_parameters(trial, config):
 
     fanout = []
     for ii in range(params['num_layers']):
-        n = trial.suggest_int(f'fanout{ii}', low=1, high=5, step=1)
+        n = trial.suggest_int(f'fanout{ii}', low=2, high=4, step=1)
         fanout.append(n)
 
     params['fanout'] = ','.join([str(f) for f in fanout])
@@ -120,10 +120,6 @@ def update_config(config, params):
     # set number of graph convolutions by fanout param if it varies
     # for num_layers construct the fanout
 
-    # fanout = params['fanout']
-    # params['fanout'] = ','.join([str(fanout)] * params['num_layers'])
-    # params['eval_fanout'] = params['fanout']
-    # params['fanout'] = ','.join([params[f'fanout{i}'] for i in range(params['num_layers'])])
     params['eval_fanout'] = ','.join(['5'] * params['num_layers'])
 
     # insert hyperparams into config object
@@ -173,7 +169,7 @@ def train(single_trial, config_args=None, train_data=None):
     config = update_config(config, params)
 
     config._topk_model_to_save = 3
-    config._save_model_path += f'/{int(number.item())}'
+    config._save_model_path += f'/{config.study_name}/{int(number.item())}'
 
     config.verify_arguments(True)
 
@@ -199,12 +195,13 @@ def train(single_trial, config_args=None, train_data=None):
 
     tracker = gs.create_builtin_task_tracker(config)
     if gs.get_rank() == 0:
+        Path(save_model_path).mkdir(parents=True, exist_ok=True)
+        
         tracker.log_params(config.__dict__)
         # save the generating configuration for this experiment
         with open(Path(save_model_path) / 'trial_params.json', 'w') as f:
             json.dump(params, f, indent=4)
 
-        Path(save_model_path).mkdir(parents=True, exist_ok=True)
         # update the yaml
         config_data = yaml.safe_load(Path(config.yaml_paths).read_text())
         # batch_size, lr go in hyperparam
@@ -222,7 +219,8 @@ def train(single_trial, config_args=None, train_data=None):
         # save
         (Path(save_model_path) / 'config.yaml').write_text(yaml.dump(config_data))        
 
-    trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save)
 
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
@@ -363,17 +361,25 @@ def main(config_args) -> None:
 
     # #### LOAD BEST MODEL
     # # TODO sort furthest model
-    best_metadata_path = Path(config.save_model_path) / 'best_metadata.json'
+    best_step, best_value = min(
+        study.best_trial.intermediate_values.items(),
+        key=lambda x: x[1]
+    )
+
+
+    best_metadata_path = Path(config.save_model_path) / f'{study.study_name}/best_metadata.json'
     if gs.get_rank() == 0:
         metadata = {
             'trial_number': study.best_trial.number,
-            'params': study.best_params
+            'params': study.best_params,
+            'step': best_step,
+            'value': best_value
         }
         best_metadata_path.write_text(json.dumps((metadata)))
 
     barrier()
     metadata = json.loads(best_metadata_path.read_text())
-    restore_path = next(Path(config.save_model_path + f'/{metadata["trial_number"]}').glob("*epoch*")).as_posix()
+    restore_path = Path(config.save_model_path + f'/{study.study_name}/{metadata["trial_number"]}/epoch-{best_step}').as_posix()
 
     config = update_config(config, metadata['params'])
 
@@ -386,7 +392,8 @@ def main(config_args) -> None:
 
     ### INFERENCE CODE
 
-    infer = GSgnnMultiTaskLearningInferrer(model)
+    # infer = GSgnnMultiTaskLearningInferrer(model)
+    infer = ResonateInferrer(model)
 
     task_evaluators, (_, _, test_dataloader) = init_evaluation(
         config, train_data
@@ -400,14 +407,9 @@ def main(config_args) -> None:
     
     infer.infer(train_data,
                 test_dataloader, 
-                None, 
-                None, 
-                None,
                 save_embed_path=config.save_embed_path,
                 save_prediction_path=config.save_prediction_path,
-                use_mini_batch_infer=config.use_mini_batch_infer,
                 node_id_mapping_file=config.node_id_mapping_file,
-                edge_id_mapping_file=config.edge_id_mapping_file,
                 return_proba=config.return_proba,
                 save_embed_format=config.save_embed_format)
     

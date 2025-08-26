@@ -103,8 +103,8 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
             nfeat_fields = loader.node_feat_fields
             node_input_feats = data.get_node_feats(input_nodes, nfeat_fields, device)
             # Since v0.4, add the edge features as one input
-            efeat_fields = loader.edge_feat_fields
-            edge_input_feats = data.get_blocks_edge_feats(blocks, efeat_fields, device)
+            # efeat_fields = loader.edge_feat_fields
+            # edge_input_feats = data.get_blocks_edge_feats(blocks, efeat_fields, device)
 
             if blocks is None:
                 continue

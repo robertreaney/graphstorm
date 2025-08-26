@@ -226,12 +226,9 @@ def main(config_args):
     # TODO fetch best path here
     model.restore_model(trainer.get_best_model_path(), model_layer_to_load=config.restore_model_layers)
     model = model.to(get_device())
-    # logging.info('RESERVED SET PERFORMANCE FOR BEST MODEL')
-    # val_result = trainer.eval(model, test_dataloader, None, -1)
 
     ### INFERENCE CODE
     infer = ResonateInferrer(model)
-    # infer = GSgnnMultiTaskLearningInferrer(model)
 
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)
