@@ -193,8 +193,11 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 "or not implement the GSgnnMultiTaskModelInterface." \
                 "Please implement GSgnnModelBase."
         
-        self.labels_path = Path(part_config).parent / 'levelsdb'
-        # Open in read-only mode for concurrent access from multiple DDP processes
+        if get_rank() == 0:
+            self.labels_path = Path(part_config).parent / 'levelsdb'
+        else:
+            self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
+        
         try:
             self.db = plyvel.DB(
                 self.labels_path.as_posix(),
@@ -204,8 +207,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 write_buffer_size=0,       # No write buffer needed for read-only
                 lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
             )
-            if get_rank() == 0:
-                logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
+            logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
         except Exception as e:
             logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
             raise e

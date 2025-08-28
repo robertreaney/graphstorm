@@ -190,11 +190,6 @@ def main(config_args):
     config = GSConfig(config_args)
     config.verify_arguments(True)
 
-    # os.environ['RANK'] = "0"
-    # os.environ['WORLD_SIZE'] = str(NUM_TRAINERS * NUM_SERVERS)
-    # os.environ['MASTER_ADDR'] = '127.0.0.1'
-    # os.environ['MASTER_PORT'] = '1234'
-
     gs.initialize(ip_config=config.ip_config, backend=config.backend,
                     local_rank=config.local_rank,
                     use_wholegraph=config.use_wholegraph_embed or False,
