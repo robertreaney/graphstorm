@@ -107,7 +107,8 @@ def train(config_args, train_data):
                             sparse_optimizer_lr=config.sparse_optimizer_lr,
                             weight_decay=config.wd_l2norm,
                             lm_lr=config.lm_tune_lr)
-    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    
+    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save, part_config=config.part_config)
     # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
@@ -183,6 +184,8 @@ def train(config_args, train_data):
     return model, task_evaluators, test_dataloader, trainer
 
 def main(config_args):
+    if not bool(os.environ['RESONATE']):
+        raise EnvironmentError('need resonate environment for custom code')
     ## main from training script graphstorm.
     config = GSConfig(config_args)
     config.verify_arguments(True)

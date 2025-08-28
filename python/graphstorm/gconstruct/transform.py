@@ -26,6 +26,7 @@ import warnings
 from abc import ABC, abstractmethod
 from numbers import Integral
 from typing import Any, Dict, List, Optional
+import struct
 
 import numpy as np
 import torch as th
@@ -1748,40 +1749,29 @@ class CustomLabelProcessor:
                 path = os.environ['RESONATE_FEATURE_STORE_PATH']
                 
                 with plyvel.DB(path, create_if_missing=True) as db:
-                    # save the id -> integer
-                    id_db = db.prefixed_db(b'id-')
-                    
                     # get the last int in the db if available. else start counting at 0
                     try:
-                        with id_db.iterator(reverse=True) as it:
-                            _, v = next(it)
-                            ii = int(v) + 1 # next integer id
-                    except:
+                        max_key = struct.unpack('<i', db.get(b'_max_id'))[0]
+                        ii = max_key + 1
+                    except TypeError:
                         ii = 0
 
+                    logging.info(f'{self._id_col} {ii}')
                     new_labels = []
-                    with id_db.write_batch() as wb:
-                        for rcid in data[self._id_col]:
-                            _id = rcid.encode()
-                            if id_db.get(_id) is None:
-                                wb.put(_id, str(ii).encode())
+                    with db.write_batch() as wb:
+                        for rcid, target in zip(data[self._id_col], label):
+                            _id = f'id-{rcid}'.encode()
+                            if db.get(_id) is None:
+                                # for new id, put it the id and label prefix dbs
+                                wb.put(_id, struct.pack('<i', ii))
+                                wb.put(f'label-{ii}'.encode(), target.tobytes())
                                 new_labels.append(ii)
                                 ii += 1
                             else:
-                                # helps mask this safe for reruns
-                                new_labels.append(int(id_db.get(_id)))
-
-                    # TODO do i need to save the reverse?
-
-                    # save the integer -> labels
-                    label_db = db.prefixed_db(b'label-')
-
-                    with label_db.write_batch() as wb:
-                        for _id, target in zip(new_labels, label):
-                            _id = str(_id).encode()
-                            # skip records we have stored already
-                            if label_db.get(_id) is None:
-                                wb.put(_id, str(target).encode())
+                                logging.warning(f'found duplicate: {rcid}')
+                    
+                    # save max id for the next iteration
+                    db.put(b'_max_id', struct.pack('<i', new_labels[-1]))
                     
                 # this should be vertical wiht shape (N, 1)
                 res[self.label_name] = np.array(new_labels, dtype=np.int32).reshape(-1, 1)

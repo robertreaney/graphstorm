@@ -21,8 +21,12 @@ import time
 import resource
 import logging
 import torch as th
+from pathlib import Path
+import plyvel
+import numpy as np
 from torch.nn.parallel import DistributedDataParallel
 import optuna
+from concurrent.futures import ThreadPoolExecutor
 
 from ..config import BUILTIN_TASK_NODE_CLASSIFICATION
 from ..eval.evaluator import GSgnnMultiTaskEvaluator
@@ -32,15 +36,20 @@ from .gsgnn_trainer import GSgnnTrainer
 
 from ..utils import sys_tracker, rt_profiler, print_mem, get_rank
 from ..utils import barrier, is_distributed
-from .mt_trainer import prepare_node_mini_batch
 from ..model.gnn_encoder_base import prepare_for_wholegraph
 from ..model.utils import append_to_dict
 from ..utils import is_distributed, get_rank, is_wholegraph
 
 
 
+def get_cached_labels(database, fake_labels, device):
+    db = database.prefixed_db(b'label-')
+    f = lambda x: np.frombuffer(db.get(str(x.item()).encode()))
+    with ThreadPoolExecutor() as exe:
+        labels = list(exe.map(f, fake_labels))
+    return th.tensor(np.array(labels, dtype=np.int32), dtype=th.int32).to(device)
 
-def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, return_label=True):
+def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, return_label=True, database=None):
     """ Perform mini-batch prediction on a GNN model.
 
     Parameters
@@ -121,6 +130,9 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
 
             label_field = loader.label_field
             label = data.get_node_feats(seeds, label_field)
+            for k, v in label.items():
+                label[k] = get_cached_labels(database, v, device)
+            
             
             if return_label:
                 append_to_dict(label, labels)
@@ -173,13 +185,38 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
     .. versionchanged:: 0.4.0
         Add support for edge feature reconstruction tasks.
     """
-    def __init__(self, model, topk_model_to_save=1):
+    def __init__(self, model, part_config, topk_model_to_save=1):
         super(ResonateMultiTaskTrainer, self).__init__(model, topk_model_to_save)
         assert isinstance(model, GSgnnMultiTaskModelInterface) \
             and isinstance(model, GSgnnModelBase), \
                 "The input model is not a GSgnnModel model "\
                 "or not implement the GSgnnMultiTaskModelInterface." \
                 "Please implement GSgnnModelBase."
+        
+        self.labels_path = Path(part_config).parent / 'levelsdb'
+        # Open in read-only mode for concurrent access from multiple DDP processes
+        try:
+            self.db = plyvel.DB(
+                self.labels_path.as_posix(),
+                create_if_missing=False,  # Read-only, don't create
+                error_if_exists=False,     # We expect it to exist
+                paranoid_checks=False,     # Skip checks for read-only
+                write_buffer_size=0,       # No write buffer needed for read-only
+                lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
+            )
+            if get_rank() == 0:
+                logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
+        except Exception as e:
+            logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
+            raise e
+
+    def __del__(self):
+        """Clean up LevelDB connection when trainer is destroyed."""
+        if hasattr(self, 'db') and self.db is not None:
+            try:
+                self.db.close()
+            except:
+                pass
 
     def _prepare_mini_batch(self, data, task_info, mini_batch, device):
         """ prepare mini batch for a single task
@@ -201,12 +238,33 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
         ------
         tuple: mini-batch
         """
+
         if task_info.task_type in \
             [BUILTIN_TASK_NODE_CLASSIFICATION]:
-            return prepare_node_mini_batch(data,
-                                           task_info,
-                                           mini_batch,
-                                           device)
+            g = data.g
+            input_nodes, seeds, blocks = mini_batch
+            if not isinstance(input_nodes, dict):
+                # This happens on a homogeneous graph.
+                assert len(g.ntypes) == 1, \
+                    "The graph should be a homogeneous graph, " \
+                    f"but it has multiple node types {g.ntypes}"
+                input_nodes = {g.ntypes[0]: input_nodes}
+
+            nfeat_fields = task_info.dataloader.node_feat_fields
+            label_field = task_info.dataloader.label_field
+            input_feats = data.get_node_feats(input_nodes, nfeat_fields, device)
+            lbl = data.get_node_feats(seeds, label_field, device)
+            
+            # RESONATE grab from kv cache
+            for k, v in lbl.items():
+                lbl[k] = get_cached_labels(self.db, v, device)
+
+            blocks = [block.to(device) for block in blocks] \
+                if blocks is not None else None
+
+            # Order follow GSgnnNodeModelInterface.forward
+            # TODO: we don't support edge features for now.
+            return (blocks, input_feats, None, lbl, input_nodes)
         else:
             raise TypeError(f"Unsupported task {task_info}. Resonate trainer supports only node classification", )
 
@@ -306,7 +364,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
             rt_profiler.start_record()
             batch_tic = time.time()
             for i, task_mini_batches in enumerate(train_loader):
-                rt_profiler.record('train_sample')
+                rt_profiler.record('get_batches')
                 total_steps += 1
 
                 mini_batches = []
@@ -314,6 +372,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                     mini_batches.append((task_info, \
                         self._prepare_mini_batch(data, task_info, mini_batch, device)))
 
+                rt_profiler.record('model_forward')
                 loss, task_losses = model(mini_batches)
 
                 rt_profiler.record('train_forward')
@@ -480,14 +539,14 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 continue
 
             if use_mini_batch_infer:
-                val_pred, val_label = resonate_mini_batch_gnn_predict(model, val_loader, task_info.task_id, return_proba)
+                val_pred, val_label = resonate_mini_batch_gnn_predict(model, val_loader, task_info.task_id, return_proba, database=self.db)
                 val_results[task_info.task_id] = (val_pred, val_label)
                 
                 sys_tracker.check('after_val_score')
                 if test_loader is not None:
                     test_pred, test_label = \
                         resonate_mini_batch_gnn_predict(model, test_loader, return_proba,
-                                                    return_label=True)
+                                                    return_label=True, database=self.db)
                     test_results[task_info.task_id] = (test_pred, test_label)
                 else: # there is no test set
                     test_pred = None
