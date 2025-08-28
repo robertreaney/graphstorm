@@ -25,6 +25,8 @@ import argparse
 import gc
 import logging
 from typing import Dict, List, Tuple, Callable
+from pathlib import Path
+import shutil
 
 import numpy as np
 import torch as th
@@ -1069,6 +1071,18 @@ def process_graph(args):
     ext_mem_workspace = args.ext_mem_workspace \
         if len(output_format) == 1 and output_format[0] == "DistDGL" else None
     convert2ext_mem = ExtMemArrayMerger(ext_mem_workspace, args.ext_mem_feat_size)
+
+    # RESONATE feature store construction
+    if os.getenv("RESONATE", False):
+        num_processes_for_nodes = 1
+        path = args.output_dir + '/levelsdb/'
+        os.environ['RESONATE_FEATURE_STORE_PATH'] = path
+        path = Path(path)
+        if path.exists():
+            logging.warning("RESONATE feature store path already exists. DELETING")
+            shutil.rmtree(path)
+        else:
+            path.mkdir(parents=True, exist_ok=True)
 
     # For feature less node type(s),
     # users may not provide node files.

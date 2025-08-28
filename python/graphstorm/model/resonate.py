@@ -157,8 +157,7 @@ class HMA(Module):
         # x = dropout(x, p=self.hyperparameters['dropout_rate_bottleneck'], training=self.training)  # this is 0
         # x = x + torch.randn_like(x) * 0  # this hyperparam is also 0
         
-        x = self.decoder(x)
-        return relu(x)
+        return self.decoder(x)
     
 # Mixture of Experts
 # Sparsely-Gated Mixture-of-Experts Layers.

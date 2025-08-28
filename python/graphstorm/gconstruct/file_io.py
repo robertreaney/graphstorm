@@ -326,8 +326,8 @@ def read_data_parquet(data_file, data_fields=None):
     for key in data_fields:
         
         if os.getenv("RESONATE", False) and key == "labels" and key not in df_table:
-            n_outputs = 18_767
-            d = np.zeros((len(df_table), n_outputs), dtype=np.int8)
+            # give unlabeled nodes a single -1 dummy label
+            d = np.full((len(df_table), 1), -1)
         else:
             assert key in df_table, f"The data field {key} does not exist in {data_file}."
             d = df_table[key].to_numpy()

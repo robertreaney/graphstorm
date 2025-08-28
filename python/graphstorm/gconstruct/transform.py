@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch as th
+import plyvel
 
 from scipy.special import erfinv # pylint: disable=no-name-in-module
 from transformers import AutoTokenizer
@@ -1740,7 +1741,54 @@ class CustomLabelProcessor:
         else:
             res = self.data_split(list(zip(data[self._id_col[0]], data[self._id_col[1]])))
         if label is not None and self._task_type == "classification":
-            res[self.label_name] = np.int32(label)
+            # RESONATE we are going to store global ids here instead of labels
+            # our dummy labels have a single int entry already
+            if os.getenv("RESONATE", False) and label.shape[1] != 1:
+                # custom feature store for resonate
+                path = os.environ['RESONATE_FEATURE_STORE_PATH']
+                
+                with plyvel.DB(path, create_if_missing=True) as db:
+                    # save the id -> integer
+                    id_db = db.prefixed_db(b'id-')
+                    
+                    # get the last int in the db if available. else start counting at 0
+                    try:
+                        with id_db.iterator(reverse=True) as it:
+                            _, v = next(it)
+                            ii = int(v) + 1 # next integer id
+                    except:
+                        ii = 0
+
+                    new_labels = []
+                    with id_db.write_batch() as wb:
+                        for rcid in data[self._id_col]:
+                            _id = rcid.encode()
+                            if id_db.get(_id) is None:
+                                wb.put(_id, str(ii).encode())
+                                new_labels.append(ii)
+                                ii += 1
+                            else:
+                                # helps mask this safe for reruns
+                                new_labels.append(int(id_db.get(_id)))
+
+                    # TODO do i need to save the reverse?
+
+                    # save the integer -> labels
+                    label_db = db.prefixed_db(b'label-')
+
+                    with label_db.write_batch() as wb:
+                        for _id, target in zip(new_labels, label):
+                            _id = str(_id).encode()
+                            # skip records we have stored already
+                            if label_db.get(_id) is None:
+                                wb.put(_id, str(target).encode())
+                    
+                # this should be vertical wiht shape (N, 1)
+                res[self.label_name] = np.array(new_labels, dtype=np.int32).reshape(-1, 1)
+            
+            else:
+                res[self.label_name] = np.int32(label)
+                
             if self._stats_type is not None:
                 if self._stats_type == LABEL_STATS_FREQUENCY_COUNT:
                     # get train labels
