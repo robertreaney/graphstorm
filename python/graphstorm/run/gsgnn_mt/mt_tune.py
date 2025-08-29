@@ -7,26 +7,26 @@ import logging
 import math
 from shutil import copy2
 from pathlib import Path
+from functools import partial
+import json
+import yaml
 import graphstorm as gs
 from graphstorm.config import GSConfig, get_argument_parser
 from graphstorm.config import BUILTIN_TASK_LINK_PREDICTION
 from graphstorm.dataloading import GSgnnMultiTaskDataLoader, GSgnnData
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import GSgnnMultiTaskLearningTrainer, ResonateMultiTaskTrainer
+from graphstorm.trainer import ResonateMultiTaskTrainer
 from graphstorm.eval import GSgnnMultiTaskEvaluator
-from graphstorm.inference import GSgnnMultiTaskLearningInferrer, ResonateInferrer
+from graphstorm.inference import ResonateInferrer
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
 from graphstorm.model_introspection import save_mermaid_diagram
+from graphstorm.utils import barrier, is_distributed
+from torch.distributed import broadcast, all_reduce, ReduceOp
 import optuna
 from optuna.integration import TorchDistributedTrial
-from functools import partial
-import json
-from torch.distributed import broadcast, all_reduce, ReduceOp
-from graphstorm.utils import barrier, is_distributed
-import yaml
 
-
+FRAC = .5
 
 def suggest_parameters(trial, config):
     search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
@@ -37,7 +37,7 @@ def suggest_parameters(trial, config):
 
     fanout = []
     for ii in range(params['num_layers']):
-        n = trial.suggest_int(f'fanout{ii}', low=2, high=4, step=1)
+        n = trial.suggest_int(f'fanout{ii}', low=2, high=5, step=1)
         fanout.append(n)
 
     params['fanout'] = ','.join([str(f) for f in fanout])
@@ -151,6 +151,7 @@ def update_config(config, params):
     
 
 def train(single_trial, config_args=None, train_data=None):
+    th.cuda.empty_cache()
     barrier()
     oom_local = 0
 
@@ -163,9 +164,10 @@ def train(single_trial, config_args=None, train_data=None):
         trial = single_trial
         number = th.tensor([int(trial.number)], device=get_device())
 
-
     config = GSConfig(config_args)
+
     params = suggest_parameters(trial, config)
+
     config = update_config(config, params)
 
     config._topk_model_to_save = 3
@@ -220,7 +222,7 @@ def train(single_trial, config_args=None, train_data=None):
         (Path(save_model_path) / 'config.yaml').write_text(yaml.dump(config_data))        
 
     # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
-    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    trainer = ResonateMultiTaskTrainer(model, config.part_config, topk_model_to_save=config.topk_model_to_save, batch_frac_per_epoch=FRAC)
 
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
@@ -334,13 +336,13 @@ def main(config_args) -> None:
                     load_if_exists= True  # need some more work for this to be possible
                 )
 
-    ## LOAD DATA ##
-    # THIS IS THE EXPENSIVE CALL
-    train_data = GSgnnData(config.part_config,
-                            node_feat_field=config.node_feat_name,
-                            edge_feat_field=config.edge_feat_name,
-                            lm_feat_ntypes=get_lm_ntypes(config.node_lm_configs))
+
     ##########################################
+    train_data = GSgnnData(config.part_config,
+        node_feat_field=config.node_feat_name,
+        edge_feat_field=config.edge_feat_name,
+        lm_feat_ntypes=get_lm_ntypes(config.node_lm_configs)
+    )
     trainable = partial(train, config_args=config_args, train_data=train_data)
     
     if gs.get_rank() == 0:
@@ -359,16 +361,16 @@ def main(config_args) -> None:
             except th.cuda.OutOfMemoryError:
                 pass
 
+    best_metadata_path = Path(config.save_model_path) / f'{config.study_name}/best_metadata.json'
     # #### LOAD BEST MODEL
     # # TODO sort furthest model
-    best_step, best_value = min(
-        study.best_trial.intermediate_values.items(),
-        key=lambda x: x[1]
-    )
-
-
-    best_metadata_path = Path(config.save_model_path) / f'{study.study_name}/best_metadata.json'
     if gs.get_rank() == 0:
+        best_step, best_value = min(
+            study.best_trial.intermediate_values.items(),
+            key=lambda x: x[1]
+        )
+        # TODO broadcast this info instead
+    
         metadata = {
             'trial_number': study.best_trial.number,
             'params': study.best_params,
@@ -378,8 +380,9 @@ def main(config_args) -> None:
         best_metadata_path.write_text(json.dumps((metadata)))
 
     barrier()
+
     metadata = json.loads(best_metadata_path.read_text())
-    restore_path = Path(config.save_model_path + f'/{study.study_name}/{metadata["trial_number"]}/epoch-{best_step}').as_posix()
+    restore_path = Path(config.save_model_path + f'/{config.study_name}/{metadata["trial_number"]}/epoch-{metadata["step"]}').as_posix()
 
     config = update_config(config, metadata['params'])
 
@@ -393,7 +396,7 @@ def main(config_args) -> None:
     ### INFERENCE CODE
 
     # infer = GSgnnMultiTaskLearningInferrer(model)
-    infer = ResonateInferrer(model)
+    infer = ResonateInferrer(model, part_config=config.part_config)
 
     task_evaluators, (_, _, test_dataloader) = init_evaluation(
         config, train_data
