@@ -26,11 +26,9 @@ import warnings
 from abc import ABC, abstractmethod
 from numbers import Integral
 from typing import Any, Dict, List, Optional
-import struct
 
 import numpy as np
 import torch as th
-import plyvel
 
 from scipy.special import erfinv # pylint: disable=no-name-in-module
 from transformers import AutoTokenizer
@@ -1742,42 +1740,7 @@ class CustomLabelProcessor:
         else:
             res = self.data_split(list(zip(data[self._id_col[0]], data[self._id_col[1]])))
         if label is not None and self._task_type == "classification":
-            # RESONATE we are going to store global ids here instead of labels
-            # our dummy labels have a single int entry already
-            if os.getenv("RESONATE", False) and label.shape[1] != 1:
-                # custom feature store for resonate
-                path = os.environ['RESONATE_FEATURE_STORE_PATH']
-                
-                with plyvel.DB(path, create_if_missing=True) as db:
-                    # get the last int in the db if available. else start counting at 0
-                    try:
-                        max_key = struct.unpack('<i', db.get(b'_max_id'))[0]
-                        ii = max_key + 1
-                    except TypeError:
-                        ii = 0
-
-                    logging.info(f'{self._id_col} {ii}')
-                    new_labels = []
-                    with db.write_batch() as wb:
-                        for rcid, target in zip(data[self._id_col], label):
-                            _id = f'id-{rcid}'.encode()
-                            if db.get(_id) is None:
-                                # for new id, put it the id and label prefix dbs
-                                wb.put(_id, struct.pack('<i', ii))
-                                wb.put(f'label-{ii}'.encode(), target.tobytes())
-                                new_labels.append(ii)
-                                ii += 1
-                            else:
-                                logging.warning(f'found duplicate: {rcid}')
-                    
-                    # save max id for the next iteration
-                    db.put(b'_max_id', struct.pack('<i', new_labels[-1]))
-                    
-                # this should be vertical wiht shape (N, 1)
-                res[self.label_name] = np.array(new_labels, dtype=np.int32).reshape(-1, 1)
-            
-            else:
-                res[self.label_name] = np.int32(label)
+            res[self.label_name] = np.int32(label)
                 
             if self._stats_type is not None:
                 if self._stats_type == LABEL_STATS_FREQUENCY_COUNT:
