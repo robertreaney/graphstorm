@@ -19,6 +19,7 @@ import os
 import time
 import logging
 from typing import Any, Dict, Optional
+import plyvel
 
 import torch as th
 
@@ -46,7 +47,7 @@ from ..utils import sys_tracker, get_rank, barrier
 from ..trainer.resonate_trainer import resonate_mini_batch_gnn_predict
 
 
-def get_predictions(model, mt_loader, use_mini_batch_infer=True):
+def get_predictions(model, mt_loader, use_mini_batch_infer=True, database=None):
     if not use_mini_batch_infer:
         raise NotImplementedError("Full graph inference is not supported yet.")
     test_start = time.time()
@@ -58,7 +59,7 @@ def get_predictions(model, mt_loader, use_mini_batch_infer=True):
     results = dict()
 
     for loader, task_info in zip(loaders, task_infos):
-        pred, label = resonate_mini_batch_gnn_predict(model, loader, task_info.task_id, True)
+        pred, label = resonate_mini_batch_gnn_predict(model, loader, task_info.task_id, True, database=database)
         results[task_info.task_id] = (pred, label)
 
     return results
@@ -75,6 +76,24 @@ class ResonateInferrer(GSInferrer):
     model : GSgnnMultiTaskModel
         The GNN model for prediction.
     """
+    def __init__(self, model, labels_path):
+        super().__init__(model)
+        
+        self.labels_path = f'{labels_path}{get_rank()}'
+
+        try:
+            self.db = plyvel.DB(
+                self.labels_path,
+                create_if_missing=False,  # Read-only, don't create
+                error_if_exists=False,     # We expect it to exist
+                paranoid_checks=False,     # Skip checks for read-only
+                write_buffer_size=0,       # No write buffer needed for read-only
+                lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
+            )
+            logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
+        except Exception as e:
+            logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
+            raise e
 
     # pylint: disable=unused-argument
     def infer(self, data,
@@ -158,7 +177,7 @@ class ResonateInferrer(GSInferrer):
             # node regressoin, edge classification
             # and edge regression tasks.
             pre_results = \
-                get_predictions(model, predict_test_loader)
+                get_predictions(model, predict_test_loader, database=self.db)
 
         if do_eval:
             test_start = time.time()

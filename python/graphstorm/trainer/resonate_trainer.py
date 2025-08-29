@@ -43,6 +43,7 @@ from ..utils import is_distributed, get_rank, is_wholegraph
 
 
 def get_cached_labels(database, fake_labels, device):
+    # TODO remove this failsafe
     db = database.prefixed_db(b'label-')
     f = lambda x: np.frombuffer(db.get(str(x.item()).encode()))
     with ThreadPoolExecutor() as exe:
@@ -193,10 +194,8 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 "or not implement the GSgnnMultiTaskModelInterface." \
                 "Please implement GSgnnModelBase."
         
-        if get_rank() == 0:
-            self.labels_path = Path(part_config).parent / 'levelsdb'
-        else:
-            self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
+
+        self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
         
         try:
             self.db = plyvel.DB(
@@ -356,7 +355,16 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
         total_steps = 0
         early_stop = False
         sys_tracker.check('start training')
+        
+        # Train on only 1/4 of the data each epoch
+        total_batches = len(train_loader)
+        frac = 20
+        limit = max(1, total_batches // frac)
+        
+        
         for epoch in range(num_epochs):
+            if get_rank() == 0:
+                logging.info("Epoch %d: Processing %d batches (1/%d of %d total)", epoch, limit, frac, total_batches)
             model.train()
             epoch_start = time.time()
             if freeze_input_layer_epochs <= epoch:
@@ -365,7 +373,13 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
 
             rt_profiler.start_record()
             batch_tic = time.time()
+            
+            
             for i, task_mini_batches in enumerate(train_loader):
+                # Break after processing quarter of data
+                if i >= limit:
+                    break
+
                 rt_profiler.record('get_batches')
                 total_steps += 1
 
