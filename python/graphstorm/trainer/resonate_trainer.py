@@ -45,7 +45,7 @@ from ..utils import is_distributed, get_rank, is_wholegraph
 def get_cached_labels(database, fake_labels, device):
     # TODO remove this failsafe
     db = database.prefixed_db(b'label-')
-    f = lambda x: np.frombuffer(db.get(str(x.item()).encode()))
+    f = lambda x: np.frombuffer(db.get(str(x.item()).encode()), 'int8')
     with ThreadPoolExecutor() as exe:
         labels = list(exe.map(f, fake_labels))
     return th.tensor(np.array(labels, dtype=np.int32), dtype=th.int32).to(device)
@@ -186,7 +186,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
     .. versionchanged:: 0.4.0
         Add support for edge feature reconstruction tasks.
     """
-    def __init__(self, model, part_config, topk_model_to_save=1):
+    def __init__(self, model, part_config, topk_model_to_save=1, batch_frac_per_epoch=1, cache_gb=2):
         super(ResonateMultiTaskTrainer, self).__init__(model, topk_model_to_save)
         assert isinstance(model, GSgnnMultiTaskModelInterface) \
             and isinstance(model, GSgnnModelBase), \
@@ -194,7 +194,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 "or not implement the GSgnnMultiTaskModelInterface." \
                 "Please implement GSgnnModelBase."
         
-
+        self.batch_frac_per_epoch = batch_frac_per_epoch
         self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
         
         try:
@@ -204,7 +204,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 error_if_exists=False,     # We expect it to exist
                 paranoid_checks=False,     # Skip checks for read-only
                 write_buffer_size=0,       # No write buffer needed for read-only
-                lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
+                lru_cache_size= int(cache_gb * 1024 * 1024 * 1024),  # 5GB cache per process
             )
             logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
         except Exception as e:
@@ -358,13 +358,12 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
         
         # Train on only 1/4 of the data each epoch
         total_batches = len(train_loader)
-        frac = 20
-        limit = max(1, total_batches // frac)
+        limit = max(1, int(total_batches * self.batch_frac_per_epoch))
         
         
         for epoch in range(num_epochs):
             if get_rank() == 0:
-                logging.info("Epoch %d: Processing %d batches (1/%d of %d total)", epoch, limit, frac, total_batches)
+                logging.info("Epoch %d: Processing %d batches (%d of %d total)", epoch, limit, self.batch_frac_per_epoch, total_batches)
             model.train()
             epoch_start = time.time()
             if freeze_input_layer_epochs <= epoch:

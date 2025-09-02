@@ -169,17 +169,17 @@ def train(config_args, train_data):
         tracker.log_params(config.__dict__)
     trainer.setup_task_tracker(tracker)
 
-    # trainer.fit(train_loader=train_dataloader,
-    #             val_loader=val_dataloader,
-    #             # test_loader=train_dataloader,
-    #             num_epochs=config.num_epochs,
-    #             save_model_path=save_model_path,
-    #             use_mini_batch_infer=config.use_mini_batch_infer,
-    #             save_model_frequency=config.save_model_frequency,
-    #             save_perf_results_path=config.save_perf_results_path,
-    #             freeze_input_layer_epochs=config.freeze_lm_encoder_epochs,
-    #             max_grad_norm=config.max_grad_norm,
-    #             grad_norm_type=config.grad_norm_type)
+    trainer.fit(train_loader=train_dataloader,
+                val_loader=val_dataloader,
+                # test_loader=train_dataloader,
+                num_epochs=config.num_epochs,
+                save_model_path=save_model_path,
+                use_mini_batch_infer=config.use_mini_batch_infer,
+                save_model_frequency=config.save_model_frequency,
+                save_perf_results_path=config.save_perf_results_path,
+                freeze_input_layer_epochs=config.freeze_lm_encoder_epochs,
+                max_grad_norm=config.max_grad_norm,
+                grad_norm_type=config.grad_norm_type)
 
     return model, task_evaluators, test_dataloader, trainer
 
@@ -218,12 +218,11 @@ def main(config_args):
     ##########################################
 
     model, task_evaluators, test_dataloader, trainer = train(config_args, train_data)
-    del trainer
 
     #### LOAD BEST MODEL
-    # TODO fetch best path here
-    model.restore_model('./.data/hem_rcid/output/hma/save/epoch-15', model_layer_to_load=config.restore_model_layers)
-    # model.restore_model(trainer.get_best_model_path(), model_layer_to_load=config.restore_model_layers)
+    # TODO make a new infer only script htat copies about above .fit and loads best model like this
+    # model.restore_model('./.data/hem_rcid/output/hma/save/epoch-15', model_layer_to_load=config.restore_model_layers)
+    model.restore_model(trainer.get_best_model_path(), model_layer_to_load=config.restore_model_layers)
     model = model.to(get_device())
 
     ### INFERENCE CODE

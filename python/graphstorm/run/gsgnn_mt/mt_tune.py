@@ -1,4 +1,5 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
+from ctypes import ArgumentError
 import os
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
@@ -30,7 +31,6 @@ FRAC = .5
 
 def suggest_parameters(trial, config):
     search_space = json.loads((Path(config.yaml_paths).parent / 'tune_space.json').read_text())
-
     params = {
         x[1]['name']: getattr(trial, f'suggest_{x[0]}')(**x[1]) for x in search_space if 'fanout' not in x[1]['name']
     }
@@ -41,7 +41,7 @@ def suggest_parameters(trial, config):
         fanout.append(n)
 
     params['fanout'] = ','.join([str(f) for f in fanout])
-
+    params['eval_fanout'] = ','.join(['5'] * params['num_layers'])
     return params
 
 def init_model(config, train_data):
@@ -120,8 +120,6 @@ def update_config(config, params):
     # set number of graph convolutions by fanout param if it varies
     # for num_layers construct the fanout
 
-    params['eval_fanout'] = ','.join(['5'] * params['num_layers'])
-
     # insert hyperparams into config object
     for k, v in params.items():
         setattr(config, f'_{k}', v)
@@ -150,10 +148,31 @@ def update_config(config, params):
     return config
     
 
+def update_yaml(config, params, save_model_path):
+    config_data = yaml.safe_load(Path(config.yaml_paths).read_text())
+    # batch_size, lr go in hyperparam
+    hyper_params = {k: v for k,v in params.items() if k in ['batch_size', 'lr']}
+    config_data['gsf'].setdefault('hyperparam', dict()).update(hyper_params)
+
+    # hidden_size, num_layers, fanout, eval_fanout go in gnn
+    gnn_params = {k: v for k,v in params.items() if k in ['hidden_size', 'num_layers', 'fanout', 'eval_fanout']}
+    config_data['gsf'].setdefault('gnn', dict()).update(gnn_params)
+
+    # hma_* goes in node_encoder_params
+    node_encoder_params = {k: v for k,v in params.items() if 'hma' in k or 'moe' in k}
+    config_data['gsf'].setdefault('node_encoder_params', dict()).update(node_encoder_params)
+
+    # save
+    (Path(save_model_path) / 'config.yaml').write_text(yaml.dump(config_data))  
+
+
 def train(single_trial, config_args=None, train_data=None):
-    th.cuda.empty_cache()
     barrier()
-    oom_local = 0
+    th.cuda.empty_cache()
+    oom_local = 0 # will help us catch oom errors
+
+    config = GSConfig(config_args)
+    config._topk_model_to_save = 1
 
     if is_distributed():
         trial = TorchDistributedTrial(single_trial)
@@ -164,15 +183,30 @@ def train(single_trial, config_args=None, train_data=None):
         trial = single_trial
         number = th.tensor([int(trial.number)], device=get_device())
 
-    config = GSConfig(config_args)
+    if config.save_model_path is not None:
+        save_model_path = config.save_model_path + f'/{config.study_name}/{int(number.item())}'
+        config._save_model_path = save_model_path  # preserve this for a later save
+    elif config.save_embed_path is not None:
+        raise NotImplementedError('tuning not implemented embedding save')
+    else:
+        raise ArgumentError("need a save model path for tuning")
 
+    # savedir suffix with trial number
+    PARAMS_PATH = Path(save_model_path) / 'trial_params.json'
     params = suggest_parameters(trial, config)
 
+    if gs.get_rank() == 0:
+        Path(save_model_path).mkdir(parents=True, exist_ok=True)
+        
+        # save the generating configuration for this experiment
+        PARAMS_PATH.write_text(json.dumps(params))
+        
+        # update the yaml
+        update_yaml(config, params, config._save_model_path)
+
+
     config = update_config(config, params)
-
-    config._topk_model_to_save = 3
-    config._save_model_path += f'/{config.study_name}/{int(number.item())}'
-
+    
     config.verify_arguments(True)
 
     tasks = config.multi_tasks
@@ -186,40 +220,9 @@ def train(single_trial, config_args=None, train_data=None):
     ### MODEL TRAINING ###                        
     model = init_model(config, train_data)
 
-    if config.save_model_path is not None:
-        save_model_path = config.save_model_path
-    elif config.save_embed_path is not None:
-        # If we need to save embeddings, we need to save the model somewhere.
-        save_model_path = os.path.join(config.save_embed_path, "model")
-    else:
-        save_model_path = None
-
-
-    tracker = gs.create_builtin_task_tracker(config)
+    tracker = gs.create_builtin_task_tracker(config) 
     if gs.get_rank() == 0:
-        Path(save_model_path).mkdir(parents=True, exist_ok=True)
-        
         tracker.log_params(config.__dict__)
-        # save the generating configuration for this experiment
-        with open(Path(save_model_path) / 'trial_params.json', 'w') as f:
-            json.dump(params, f, indent=4)
-
-        # update the yaml
-        config_data = yaml.safe_load(Path(config.yaml_paths).read_text())
-        # batch_size, lr go in hyperparam
-        hyper_params = {k: v for k,v in params.items() if k in ['batch_size', 'lr']}
-        config_data['gsf'].get('hyperparam', dict()).update(hyper_params)
-
-        # hidden_size, num_layers, fanout, eval_fanout go in gnn
-        gnn_params = {k: v for k,v in params.items() if k in ['hidden_size', 'num_layers', 'fanout', 'eval_fanout']}
-        config_data['gsf'].get('gnn', dict()).update(gnn_params)
-
-        # hma_* goes in node_encoder_params
-        node_encoder_params = {k: v for k,v in params.items() if 'hma' in k or 'moe' in k}
-        config_data['gsf'].get('node_encoder_params', dict()).update(node_encoder_params)
-
-        # save
-        (Path(save_model_path) / 'config.yaml').write_text(yaml.dump(config_data))        
 
     # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
     trainer = ResonateMultiTaskTrainer(model, config.part_config, topk_model_to_save=config.topk_model_to_save, batch_frac_per_epoch=FRAC)
@@ -411,7 +414,7 @@ def main(config_args) -> None:
     infer.infer(train_data,
                 test_dataloader, 
                 save_embed_path=config.save_embed_path,
-                save_prediction_path=config.save_prediction_path,
+                save_prediction_path=config.save_prediction_path + f'/{config.study_name}/',
                 node_id_mapping_file=config.node_id_mapping_file,
                 return_proba=config.return_proba,
                 save_embed_format=config.save_embed_format)

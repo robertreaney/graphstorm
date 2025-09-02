@@ -19,7 +19,6 @@
 import abc
 import logging
 import time
-from cycler import V
 import torch as th
 import dgl
 from torch import nn

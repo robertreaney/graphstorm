@@ -20,6 +20,7 @@ import time
 import logging
 from typing import Any, Dict, Optional
 import plyvel
+from pathlib import Path
 
 import torch as th
 
@@ -76,14 +77,14 @@ class ResonateInferrer(GSInferrer):
     model : GSgnnMultiTaskModel
         The GNN model for prediction.
     """
-    def __init__(self, model, labels_path):
+    def __init__(self, model, part_config):
         super().__init__(model)
         
-        self.labels_path = f'{labels_path}{get_rank()}'
+        self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
 
         try:
             self.db = plyvel.DB(
-                self.labels_path,
+                self.labels_path.as_posix(),
                 create_if_missing=False,  # Read-only, don't create
                 error_if_exists=False,     # We expect it to exist
                 paranoid_checks=False,     # Skip checks for read-only
