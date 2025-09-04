@@ -1307,7 +1307,7 @@ def save_edge_prediction_result(predictions, src_nids, dst_nids,
     th.save(dst_nids, os.path.join(prediction_path, f"dst_nids-{pad_file_index(rank)}.pt"))
 
 def save_node_prediction_result(predictions, nids,
-                               prediction_path, rank):
+                               prediction_path, rank, labels=None):
     """ Save node predictions to the given path, i.e., prediction_path.
 
         The function will save two tensors: 1) predictions, which stores
@@ -1337,6 +1337,8 @@ def save_node_prediction_result(predictions, nids,
     barrier()
     th.save(predictions, os.path.join(prediction_path, f"predict-{pad_file_index(rank)}.pt"))
     th.save(nids, os.path.join(prediction_path, f"predict_nids-{pad_file_index(rank)}.pt"))
+    if labels is not None:
+        th.save(labels, os.path.join(prediction_path, f"predict_labels-{pad_file_index(rank)}.pt"))
 
 def save_prediction_results(predictions, prediction_path, rank):
     """ Save node predictions to the given path
@@ -1413,10 +1415,10 @@ def save_node_prediction_results(predictions, prediction_path):
     """
     rank = get_rank()
     world_size = get_world_size()
-    for ntype, (pred, nids) in predictions.items():
+    for ntype, (pred, nids, labels) in predictions.items():
         save_node_prediction_result(pred, nids,
                                     os.path.join(prediction_path, ntype),
-                                    rank)
+                                    rank, labels=labels)
     if rank == 0:
         meta_fname = os.path.join(prediction_path, "result_info.json")
         meta_info = {

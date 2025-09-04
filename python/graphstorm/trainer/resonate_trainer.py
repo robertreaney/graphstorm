@@ -43,9 +43,7 @@ from ..utils import is_distributed, get_rank, is_wholegraph
 
 
 def get_cached_labels(database, fake_labels, device):
-    # TODO remove this failsafe
-    db = database.prefixed_db(b'label-')
-    f = lambda x: np.frombuffer(db.get(str(x.item()).encode()), 'int8')
+    f = lambda x: np.frombuffer(database.get(str(x.item()).encode()), 'int32')
     with ThreadPoolExecutor() as exe:
         labels = list(exe.map(f, fake_labels))
     return th.tensor(np.array(labels, dtype=np.int32), dtype=th.int32).to(device)
@@ -131,8 +129,9 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
 
             label_field = loader.label_field
             label = data.get_node_feats(seeds, label_field)
-            for k, v in label.items():
-                label[k] = get_cached_labels(database, v, device)
+            if database is not None:
+                for k, v in label.items():
+                    label[k] = get_cached_labels(database, v, device)
             
             
             if return_label:
@@ -186,7 +185,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
     .. versionchanged:: 0.4.0
         Add support for edge feature reconstruction tasks.
     """
-    def __init__(self, model, part_config, topk_model_to_save=1, batch_frac_per_epoch=1, cache_gb=2):
+    def __init__(self, model, part_config, topk_model_to_save=1, batch_frac_per_epoch=1, cache_gb=2, random_baseline=False, cached_labels=True):
         super(ResonateMultiTaskTrainer, self).__init__(model, topk_model_to_save)
         assert isinstance(model, GSgnnMultiTaskModelInterface) \
             and isinstance(model, GSgnnModelBase), \
@@ -196,20 +195,25 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
         
         self.batch_frac_per_epoch = batch_frac_per_epoch
         self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
+        self.random_baseline = random_baseline
+        self.cached_labels = cached_labels
         
-        try:
-            self.db = plyvel.DB(
-                self.labels_path.as_posix(),
-                create_if_missing=False,  # Read-only, don't create
-                error_if_exists=False,     # We expect it to exist
-                paranoid_checks=False,     # Skip checks for read-only
-                write_buffer_size=0,       # No write buffer needed for read-only
-                lru_cache_size= int(cache_gb * 1024 * 1024 * 1024),  # 5GB cache per process
-            )
-            logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
-        except Exception as e:
-            logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
-            raise e
+        if self.cached_labels:
+            try:
+                self.db = plyvel.DB(
+                    self.labels_path.as_posix(),
+                    create_if_missing=False,  # Read-only, don't create
+                    error_if_exists=False,     # We expect it to exist
+                    paranoid_checks=False,     # Skip checks for read-only
+                    write_buffer_size=0,       # No write buffer needed for read-only
+                    lru_cache_size= int(cache_gb * 1024 * 1024 * 1024),  # 5GB cache per process
+                )
+                logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
+            except Exception as e:
+                logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
+                raise e
+        else:
+            self.db = None
 
     def __del__(self):
         """Clean up LevelDB connection when trainer is destroyed."""
@@ -254,11 +258,16 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
             nfeat_fields = task_info.dataloader.node_feat_fields
             label_field = task_info.dataloader.label_field
             input_feats = data.get_node_feats(input_nodes, nfeat_fields, device)
+            
+            if self.random_baseline:
+                input_feats = {k: th.randn_like(v) for k, v in input_feats.items()}
+                
             lbl = data.get_node_feats(seeds, label_field, device)
             
             # RESONATE grab from kv cache
-            for k, v in lbl.items():
-                lbl[k] = get_cached_labels(self.db, v, device)
+            if self.cached_labels:
+                for k, v in lbl.items():
+                    lbl[k] = get_cached_labels(self.db, v, device)
 
             blocks = [block.to(device) for block in blocks] \
                 if blocks is not None else None

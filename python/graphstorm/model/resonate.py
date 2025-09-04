@@ -1,7 +1,7 @@
 import logging
 import torch
 import torch.nn as nn
-from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU, GELU
+from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU, GELU, Identity
 from torch.nn.functional import relu, dropout, gelu
 from torch.distributions.normal import Normal
 import numpy as np
@@ -133,7 +133,10 @@ class HMA(Module):
         ])
 
         # decoder
-        self.decoder = Linear(self.input_dimension, out_features=self.out_features)
+        if self.input_dimension != self.out_features:
+            self.decoder = Linear(self.input_dimension, out_features=self.out_features)
+        else:
+            self.decoder = Identity()
 
     def forward(self, x, *args, **kwargs):
         x = self.input_proj(x)

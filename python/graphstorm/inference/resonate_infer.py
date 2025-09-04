@@ -77,24 +77,27 @@ class ResonateInferrer(GSInferrer):
     model : GSgnnMultiTaskModel
         The GNN model for prediction.
     """
-    def __init__(self, model, part_config):
+    def __init__(self, model, part_config, cached_labels=True):
         super().__init__(model)
         
         self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
 
-        try:
-            self.db = plyvel.DB(
-                self.labels_path.as_posix(),
-                create_if_missing=False,  # Read-only, don't create
-                error_if_exists=False,     # We expect it to exist
-                paranoid_checks=False,     # Skip checks for read-only
-                write_buffer_size=0,       # No write buffer needed for read-only
-                lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
-            )
-            logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
-        except Exception as e:
-            logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
-            raise e
+        if cached_labels:
+            try:
+                self.db = plyvel.DB(
+                    self.labels_path.as_posix(),
+                    create_if_missing=False,  # Read-only, don't create
+                    error_if_exists=False,     # We expect it to exist
+                    paranoid_checks=False,     # Skip checks for read-only
+                    write_buffer_size=0,       # No write buffer needed for read-only
+                    lru_cache_size= 5 * 1024 * 1024 * 1024,  # 5GB cache per process
+                )
+                logging.info(f"Opened LevelDB at {self.labels_path} for rank {get_rank()}")
+            except Exception as e:
+                logging.error(f"Could not open LevelDB at {self.labels_path}: {e}")
+                raise e
+        else:
+            self.db = None
 
     # pylint: disable=unused-argument
     def infer(self, data,
@@ -231,7 +234,7 @@ class ResonateInferrer(GSInferrer):
                 save_pred_path = os.path.join(save_prediction_path, task_id)
                 if task_info.task_type in \
                     [BUILTIN_TASK_NODE_CLASSIFICATION, BUILTIN_TASK_NODE_REGRESSION]:
-                    pred, _ = pre_results[task_id]
+                    pred, labels = pre_results[task_id]
                     if pred is not None:
                         shuffled_preds = {}
 
@@ -241,7 +244,7 @@ class ResonateInferrer(GSInferrer):
                             pred_nids = nid_shuffler.shuffle_nids(
                                 target_ntype, pred_nids)
 
-                        shuffled_preds[target_ntype] = (pred, pred_nids)
+                        shuffled_preds[target_ntype] = (pred, pred_nids, labels)
                         save_node_prediction_results(shuffled_preds, save_pred_path)
                 else:
                     # There is no prediction results for link prediction

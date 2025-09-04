@@ -13,31 +13,15 @@ from graphstorm.config import GSConfig, get_argument_parser
 from graphstorm.config import BUILTIN_TASK_LINK_PREDICTION
 from graphstorm.dataloading import GSgnnMultiTaskDataLoader, GSgnnData
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import ResonateMultiTaskTrainer, GSgnnMultiTaskLearningTrainer
+from graphstorm.trainer import ResonateMultiTaskTrainer
 from graphstorm.eval import GSgnnMultiTaskEvaluator
-from graphstorm.inference import GSgnnMultiTaskLearningInferrer, ResonateInferrer
+from graphstorm.inference import ResonateInferrer
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
 from graphstorm.model_introspection import save_mermaid_diagram
 
-# FMT = "%(asctime)s %(levelname)s %(message)s"
-# logging.basicConfig(format=FMT, level=logging.DEBUG)
-
-# PART_CONFIG = ".data/debug/graph/debug.json"
-# CONFIG_FILE = "experiments/debug/gnn.yaml"
-# NUM_TRAINERS = 1
-# NUM_SERVERS = 1
-
-# config_args = Namespace(**{
-#     'logging_level': 'info', 
-#     'yaml_config_file': CONFIG_FILE, 
-#     'local_rank': 0, 
-#     'profile_path': None, 
-#     'construct_feat_ntype': None, 
-#     'part_config': PART_CONFIG, 
-#     'save_model_path': '.',
-#     'use_graphbolt': True
-# })
+RANDOM_BASELINE=False
+CACHED_LABELS=True
 
 def train(config_args, train_data):
 
@@ -108,8 +92,8 @@ def train(config_args, train_data):
                             weight_decay=config.wd_l2norm,
                             lm_lr=config.lm_tune_lr)
     
-    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save, part_config=config.part_config)
-    # trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
+    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save, part_config=config.part_config, random_baseline=RANDOM_BASELINE, cached_labels=CACHED_LABELS)
+    
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
                                             task_evaluators,
@@ -218,15 +202,16 @@ def main(config_args):
     ##########################################
 
     model, task_evaluators, test_dataloader, trainer = train(config_args, train_data)
-
+    
     #### LOAD BEST MODEL
     # TODO make a new infer only script htat copies about above .fit and loads best model like this
     # model.restore_model('./.data/hem_rcid/output/hma/save/epoch-15', model_layer_to_load=config.restore_model_layers)
     model.restore_model(trainer.get_best_model_path(), model_layer_to_load=config.restore_model_layers)
     model = model.to(get_device())
+    del trainer
 
     ### INFERENCE CODE
-    infer = ResonateInferrer(model, labels_path='.data/hem_rcid/graph/levelsdb')
+    infer = ResonateInferrer(model, part_config=config.part_config, cached_labels=CACHED_LABELS)
 
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)

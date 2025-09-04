@@ -148,7 +148,7 @@ def write_data_csv_file(data, file_prefix, delimiter=",", col_name_map=None):
     data_frame = pd.DataFrame(csv_data)
     data_frame.to_csv(output_fname, index=False, sep=delimiter)
 
-def worker_remap_node_data(data_file_path, nid_path, ntype, data_col_key,
+def worker_remap_node_data(data_file_path, nid_path, label_path, ntype, data_col_key,
     output_fname_prefix, chunk_size, output_func):
     """ Do one node prediction remapping task
 
@@ -171,6 +171,7 @@ def worker_remap_node_data(data_file_path, nid_path, ntype, data_col_key,
     """
     node_data = th.load(data_file_path).numpy()
     nids = th.load(nid_path).numpy()
+    labels = th.load(label_path).numpy()
     nid_map = id_maps[ntype]
     num_chunks = math.ceil(len(node_data) / chunk_size)
 
@@ -178,9 +179,11 @@ def worker_remap_node_data(data_file_path, nid_path, ntype, data_col_key,
         start = i * chunk_size
         end = (i + 1) * chunk_size if i + 1 < num_chunks else len(node_data)
         data = node_data[start:end]
+        label = labels[start:end]
         nid = nid_map.map_id(nids[start:end])
         data = {data_col_key: data,
-                GS_REMAP_NID_COL: nid}
+                GS_REMAP_NID_COL: nid,
+                'labels': label}
         output_func(data, f"{output_fname_prefix}_{pad_file_index(i)}")
 
 def worker_remap_edge_pred(pred_file_path, src_nid_path,
@@ -465,9 +468,12 @@ def remap_node_pred(pred_ntypes, pred_dir,
         ntype_pred_files = os.listdir(input_pred_dir)
         nid_files = [fname for fname in ntype_pred_files if fname.startswith("predict_nids-")]
         pred_files = [fname for fname in ntype_pred_files if fname.startswith("predict-")]
+        label_files = [fname for fname in ntype_pred_files if fname.startswith("predict_labels-")]
 
         nid_files.sort()
         pred_files.sort()
+        label_files.sort()
+
         num_parts = len(pred_files)
         logging.debug("{%s} has {%d} prediction files", ntype, num_parts)
         assert len(nid_files) == len(pred_files), \
@@ -475,10 +481,17 @@ def remap_node_pred(pred_ntypes, pred_dir,
             "the number of prediction result files, but get " \
             f"{len(nid_files)} and {len(pred_files)}"
 
+        assert len(label_files) == len(pred_files), \
+            "Expect the number of label files equal to " \
+            "the number of prediction result files, but get " \
+            f"{len(label_files)} and {len(pred_files)}"
+
         files_to_remove += [os.path.join(input_pred_dir, nid_file) \
                             for nid_file in nid_files]
         files_to_remove += [os.path.join(input_pred_dir, pred_file) \
                             for pred_file in pred_files]
+        files_to_remove += [os.path.join(input_pred_dir, label_file) \
+                            for label_file in label_files]
 
         if with_shared_fs:
             # If the data are stored in a shared filesystem,
@@ -495,10 +508,12 @@ def remap_node_pred(pred_ntypes, pred_dir,
         for i in range(start, end):
             pred_file = pred_files[i]
             nid_file = nid_files[i]
+            label_file = label_files[i]
 
             task_list.append({
                 "data_file_path": os.path.join(input_pred_dir, pred_file),
                 "nid_path": os.path.join(input_pred_dir, nid_file),
+                "label_path": os.path.join(input_pred_dir, label_file),
                 "ntype": ntype,
                 "data_col_key": GS_REMAP_PREDICTION_COL,
                 "output_fname_prefix": os.path.join(out_pred_dir, \
