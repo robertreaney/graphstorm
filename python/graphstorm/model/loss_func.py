@@ -155,6 +155,7 @@ class MaskedClassifyLossFunc(GSLayer):
         false_val = labels.new_tensor(self.false)
         mask = (labels == true_val) | (labels == false_val)
         # map true to 1 and false to 0
+        # TODO check this where call for accuracy
         labels = th.where(
             labels == true_val, 
             1, 

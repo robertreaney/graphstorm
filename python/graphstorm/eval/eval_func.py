@@ -35,7 +35,7 @@ SUPPORTED_RECALL_AT_PRECISION_METRICS = 'recall_at_precision'
 SUPPORTED_PRECISION_AT_RECALL_METRICS = 'precision_at_recall'
 SUPPORTED_FSCORE_AT_METRICS = 'fscore_at'
 SUPPORTED_HIT_AT_METRICS = 'hit_at'
-SUPPORTED_CLASSIFICATION_METRICS = {'loss', 'accuracy', 'precision_recall', \
+SUPPORTED_CLASSIFICATION_METRICS = {'masked_auc', 'loss', 'accuracy', 'precision_recall', \
     'roc_auc', 'f1_score', 'per_class_f1_score', 'per_class_roc_auc', 'precision', 'recall', \
     SUPPORTED_HIT_AT_METRICS, SUPPORTED_FSCORE_AT_METRICS, \
     SUPPORTED_RECALL_AT_PRECISION_METRICS, SUPPORTED_PRECISION_AT_RECALL_METRICS}
@@ -69,6 +69,7 @@ class ClassificationMetrics:
         self.metric_comparator["precision"] = operator.le
         self.metric_comparator["recall"] = operator.le
         self.metric_comparator["loss"] = operator.ge
+        self.metric_comparator["masked_auc"] = operator.le
 
         # This is the operator used to measure each metric performance in training
         self.metric_function = {}
@@ -81,6 +82,7 @@ class ClassificationMetrics:
         self.metric_function["precision"] = compute_precision
         self.metric_function["recall"] = compute_recall
         self.metric_function["loss"] = compute_loss
+        self.metric_function["masked_auc"] = compute_masked_auc
 
         # This is the operator used to measure each metric performance in evaluation
         self.metric_eval_function = {}
@@ -93,6 +95,7 @@ class ClassificationMetrics:
         self.metric_eval_function["precision"] = compute_precision
         self.metric_eval_function["recall"] = compute_recall
         self.metric_eval_function["loss"] = compute_loss
+        self.metric_eval_function["masked_auc"] = compute_masked_auc
 
         for eval_metric in eval_metric_list:
             if eval_metric.startswith(SUPPORTED_HIT_AT_METRICS):
@@ -1110,7 +1113,22 @@ def compute_loss(y_preds, y_targets):
     y_true = th.where(y_targets == -1, 0, y_targets)
     
     loss_score = th.nn.functional.binary_cross_entropy(
-        y_preds[mask], y_true[mask].to(dtype=y_preds.dtype)
+        y_preds[mask], 
+        y_true[mask].to(dtype=y_preds.dtype)
     ).item()
 
     return loss_score
+
+def compute_masked_auc(y_preds, y_targets):
+
+    mask = (y_targets == 1) | (y_targets == -1)  # Only 1 or -1
+    y_targets = th.where(y_targets == -1, 0, y_targets)
+    
+    scores = []
+    for pred, target, m in zip(y_preds.T, y_targets.T, mask.T):
+        try:
+            scores.append(roc_auc_score(target[m].cpu().numpy(), pred[m].cpu().numpy()))
+        except:
+            pass
+
+    
