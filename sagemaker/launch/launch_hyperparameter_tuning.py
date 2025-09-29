@@ -40,6 +40,7 @@ import json
 import logging
 from typing import Literal
 
+from graphstorm.sagemaker.utils import keep_alive
 from sagemaker.pytorch.estimator import PyTorch
 from sagemaker.tuner import (
     ParameterRange,
@@ -54,10 +55,12 @@ from sagemaker.tuner import (
 from common_parser import (
     parse_estimator_kwargs,
     parse_unknown_gs_args,
+    create_sm_session
 )
 from launch_train import get_train_parser
 
-INSTANCE_TYPE = "ml.g4dn.12xlarge"
+# INSTANCE_TYPE = "ml.g4dn.12xlarge"
+INSTANCE_TYPE = "ml.g5.12xlarge"
 
 
 def get_metric_definitions(
@@ -176,7 +179,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
 
     container_image_uri = image
 
-    prefix = f"gs-hpo-{args.graph_name}"
+    prefix = f"graphstorm/gs-hpo-{args.graph_name}"
 
     params = {
         "eval-metric": args.metric_name,
@@ -234,6 +237,8 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
             {"Key": "GraphStorm", "Value": "oss"},
             {"Key": "GraphStorm_Task", "Value": "HPO"},
         ],
+        keep_alive_period_in_seconds=600,
+        sagemaker_session=create_sm_session(args.instance_type, args.region),
         **estimator_kwargs,
     )
 
@@ -255,7 +260,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
         "max_jobs": args.max_jobs,
         "max_parallel_jobs": args.max_parallel_jobs,
         "metric_definitions": metric_definitions,
-        "strategy": args.strategy,
+        "strategy": args.strategy
     }
 
     # Add Hyperband-specific configuration if needed

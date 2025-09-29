@@ -40,6 +40,8 @@ RUN pip3 install \
         tensorboard==2.18.0 \
         torchdata==0.9.0 \
         transformers==4.28.1 \
+        structlog==25.4.0 \
+        plyvel==1.5.1 \
     && rm -rf /root/.cache
 
 
@@ -49,6 +51,7 @@ COPY build_artifacts/start_with_right_hostname.sh /usr/local/bin/start_with_righ
 
 # /opt/ml and all subdirectories are utilized by SageMaker,
 # we use the /usr/local/lib subdirectory to store our user code.
+# COPY .data/hem_rcid/graph/levelsdb0 /opt/ml/input/data/train/hem_rcid/levelsdb0
 COPY code/graphstorm/ /usr/local/lib/graphstorm/
 ENV PYTHONPATH="/usr/local/lib/graphstorm/python/:${PYTHONPATH}"
 
@@ -58,7 +61,9 @@ COPY code/graphstorm/sagemaker/run/* /opt/ml/code/
 RUN cd /root; git clone --branch v${DGL_VERSION} --single-branch https://github.com/dmlc/dgl.git
 # Un-comment if we prefer a local DGL distribution
 # COPY dgl /root/dgl
+
 ENV PYTHONPATH="/root/dgl/tools/:${PYTHONPATH}"
+ENV RESONATE=true
 
 WORKDIR  /opt/ml/code/
 

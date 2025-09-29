@@ -17,6 +17,7 @@
 """
 from ctypes import ArgumentError
 import os
+import glob
 import time
 import resource
 import logging
@@ -24,8 +25,11 @@ import torch as th
 from pathlib import Path
 import plyvel
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from torch.nn.parallel import DistributedDataParallel
-import optuna
+# import optuna
 from concurrent.futures import ThreadPoolExecutor
 
 from ..config import BUILTIN_TASK_NODE_CLASSIFICATION
@@ -41,12 +45,69 @@ from ..model.utils import append_to_dict
 from ..utils import is_distributed, get_rank, is_wholegraph
 
 
+BATCH_FRAC = .5
 
 def get_cached_labels(database, fake_labels, device):
-    f = lambda x: np.frombuffer(database.get(str(x.item()).encode()), 'int32')
+    def f(x):
+        try:
+            key = str(x.item()).encode()
+            key = b'label-' + key
+            val = database.get(key)
+            if val is None:
+                raise ValueError(f"Key {x.item()} not in database")
+            return np.frombuffer(val, 'int32')
+        except Exception as e:
+            raise ValueError(f"Failed to get label for ID {x.item()}: {e}")
+        
     with ThreadPoolExecutor() as exe:
         labels = list(exe.map(f, fake_labels))
     return th.tensor(np.array(labels, dtype=np.int32), dtype=th.int32).to(device)
+
+
+def safe_cat(tensor_list, save_dir=".data/temp", prefix="preds", dtype=th.float32):
+    """
+    Memory-safe replacement for torch.cat(list_of_tensors).
+    Uses Parquet as intermediate storage to avoid OOM.
+
+    Args:
+        tensor_list: list of torch.Tensors [N_i, D]
+        save_dir: where to write temporary parquet files
+        prefix: file name prefix
+        dtype: dtype of final tensor
+
+    Returns:
+        torch.Tensor of shape [sum(N_i), D]
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 1. Write each tensor to a parquet file
+    # for i, t in enumerate(tensor_list):
+    #     arr = t.detach().cpu().numpy()
+    #     columns = [pa.array(arr[:, j]) for j in range(arr.shape[1])]
+    #     names = [f"dim{j}" for j in range(arr.shape[1])]
+    #     table = pa.Table.from_arrays(columns, names=names)
+    #     pq.write_table(table, os.path.join(save_dir, f"{prefix}_{i}.parquet"))
+    # del arr, table, columns
+    del tensor_list
+
+    # 2. Reload parquet files and preallocate final tensor
+    files = sorted(glob.glob(os.path.join(save_dir, f"{prefix}_*.parquet")))
+    sample_table = pq.read_table(files[0])
+    num_cols = len(sample_table.column_names)
+    total_rows = sum(pq.read_metadata(f).num_rows for f in files)
+
+    big_tensor = th.empty((total_rows, num_cols), dtype=dtype)
+
+    # 3. Fill tensor incrementally
+    offset = 0
+    for f in files:
+        table = pq.read_table(f)
+        arr = np.column_stack([table[col].to_numpy() for col in table.column_names])
+        n = arr.shape[0]
+        big_tensor[offset:offset+n] = th.from_numpy(arr)
+        offset += n
+
+    return big_tensor
 
 def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, return_label=True, database=None):
     """ Perform mini-batch prediction on a GNN model.
@@ -92,6 +153,8 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
         max_num_batch = tensor[0]
 
     dataloader_iter = iter(loader)
+    if get_rank() == 0:
+        logging.info(f"Starting inference with {max_num_batch} batches")
 
     with th.no_grad():
         # WholeGraph does not support imbalanced batch numbers across processes/trainers
@@ -149,14 +212,28 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
                 append_to_dict({ntype: pred}, preds)
 
             if get_rank() == 0 and iter_l % 20 == 0:
-                logging.debug("iter %d out of %d: takes %.3f seconds",
+                logging.info("iter %d out of %d: takes %.3f seconds",
                               iter_l, max_num_batch, time.time() - iter_start)
-
+            
+    # TODO this concat breaks in daily inference if graphs are too big
     # MFG for DGL 2.0.0+ return all node and edge type
+    # if database is not None: # during training we dont have to worry about RAM consumption
+    #     preds = {
+    #         ntype: th.cat(preds[ntype])
+    #         for ntype in preds if ntype in target_ntypes
+    #     }
+    # else:
+    #     # during inference a th.cat will explode RAM
+    #     preds = {
+    #         ntype: safe_cat(preds[ntype], prefix=f"preds_rank{get_rank()}_{ntype}")
+    #         for ntype in preds if ntype in target_ntypes
+    #     }
+
     preds = {
         ntype: th.cat(preds[ntype])
         for ntype in preds if ntype in target_ntypes
     }
+
     for ntype, ntype_label in labels.items():
         labels[ntype] = th.cat(ntype_label)
     target_ntype = list(target_ntypes)[0]
@@ -185,24 +262,27 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
     .. versionchanged:: 0.4.0
         Add support for edge feature reconstruction tasks.
     """
-    def __init__(self, model, part_config, topk_model_to_save=1, batch_frac_per_epoch=1, cache_gb=2, random_baseline=False, cached_labels=True):
+    def __init__(self, model, part_config, topk_model_to_save=1, batch_frac_per_epoch=BATCH_FRAC, cache_gb=2, random_baseline=False, cached_labels=True):
         super(ResonateMultiTaskTrainer, self).__init__(model, topk_model_to_save)
         assert isinstance(model, GSgnnMultiTaskModelInterface) \
             and isinstance(model, GSgnnModelBase), \
                 "The input model is not a GSgnnModel model "\
                 "or not implement the GSgnnMultiTaskModelInterface." \
                 "Please implement GSgnnModelBase."
-        
+
         self.batch_frac_per_epoch = batch_frac_per_epoch
         self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
         self.random_baseline = random_baseline
         self.cached_labels = cached_labels
         
+        # debug
+        logging.info(f"Rank {get_rank()} self.labels_path: {self.labels_path} contents: {list(self.labels_path.iterdir())[:5] if self.labels_path.exists() else 'Path does not exist'}")
+
         if self.cached_labels:
             try:
                 self.db = plyvel.DB(
                     self.labels_path.as_posix(),
-                    create_if_missing=False,  # Read-only, don't create
+                    create_if_missing=True,  # Read-only, don't create
                     error_if_exists=False,     # We expect it to exist
                     paranoid_checks=False,     # Skip checks for read-only
                     write_buffer_size=0,       # No write buffer needed for read-only
@@ -418,7 +498,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                         per_task_loss[task_info.task_id] = task_loss[0].item()
                     logging.info("Epoch %05d | Batch %03d | Train Loss: %.4f | Time: %.4f",
                                  epoch, i, loss.item(), time.time() - batch_tic)
-                    logging.debug("Per task Loss: %s", per_task_loss)
+                    logging.info("Per task Loss: %s", per_task_loss)
 
                 val_score = None
                 # if self.can_do_validation(val_loader) and self.evaluator.do_eval(total_steps):
@@ -466,10 +546,10 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 if self.evaluator.do_early_stop(val_score):
                     early_stop = True
                     
-                if is_optuna_run:
-                    optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
-                    if optuna_trial.should_prune():
-                        raise optuna.TrialPruned()
+                # if is_optuna_run:
+                #     optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
+                #     if optuna_trial.should_prune():
+                #         raise optuna.TrialPruned()
 
 
             # After each epoch, check to save the top k models.
@@ -569,8 +649,7 @@ class ResonateMultiTaskTrainer(GSgnnTrainer):
                 sys_tracker.check('after_val_score')
                 if test_loader is not None:
                     test_pred, test_label = \
-                        resonate_mini_batch_gnn_predict(model, test_loader, return_proba,
-                                                    return_label=True, database=self.db)
+                        resonate_mini_batch_gnn_predict(model, test_loader, task_info.task_id, return_proba=return_proba, return_label=True, database=self.db)
                     test_results[task_info.task_id] = (test_pred, test_label)
                 else: # there is no test set
                     test_pred = None

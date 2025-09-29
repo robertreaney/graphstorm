@@ -259,6 +259,19 @@ class GSSageMakerTaskTracker(GSTaskTrackerAbc):
                                 best_test_score_metric,
                                 best_iter_metric)
 
+        # log aggregate validation metric for sagemaker hp tuning
+        try:
+            val_agg_score = sum([x[metrics[0]] for metrics, x in zip(eval_metrics.values(), val_score.values())])
+            first_metric_name = next(iter(eval_metrics.values()))[0]  # get the first metric name
+
+            self.log_valid_metric(
+                first_metric_name,
+                val_agg_score,
+                total_steps, force_report=True
+            )
+        except Exception as e:
+            logging.warning("Failed to log aggregate validation metric: %s", e)
+
     def log_per_metric(self, metric, train_score, val_score, test_score,
         dur_eval, total_steps, best_val_score, best_test_score, best_iter_num):
         """ Log information of a evaluation metric

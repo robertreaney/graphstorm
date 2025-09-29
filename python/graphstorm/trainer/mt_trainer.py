@@ -22,7 +22,7 @@ import logging
 import torch as th
 from torch.nn.parallel import DistributedDataParallel
 import dgl
-import optuna
+# import optuna
 import graphstorm as gs
 
 from ..config import (BUILTIN_TASK_NODE_CLASSIFICATION,
@@ -511,10 +511,10 @@ class GSgnnMultiTaskLearningTrainer(GSgnnTrainer):
                 if self.evaluator.do_early_stop(val_score):
                     early_stop = True
                     
-                if is_optuna_run:
-                    optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
-                    if optuna_trial.should_prune():
-                        raise optuna.TrialPruned()
+                # if is_optuna_run:
+                #     optuna_trial.report(self.evaluator._get_early_stop_score(val_score), step=epoch)
+                #     if optuna_trial.should_prune():
+                #         raise optuna.TrialPruned()
 
 
             # After each epoch, check to save the top k models.

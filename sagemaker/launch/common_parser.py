@@ -41,7 +41,7 @@ def create_sm_session(instance_type, region):
         sess = LocalSession()
         # Add local SM config if needed
         if sess.config is None:
-            sess.config = {}
+            sess.config = {"local": {"local_code": True}}
         sess.config.update({"local": {"local_code": True}})
 
         # if shm_size is not specified, use 90% of host memory as shared memory.
@@ -55,7 +55,11 @@ def create_sm_session(instance_type, region):
                 shm_size_mb = (psutil.virtual_memory().total * 0.9) // (1024**2)
             except ImportError:
                 shm_size_mb = 1024
-            sess.config["local"]["container_config"] = {"shm_size": f"{shm_size_mb}m"}
+            sess.config["local"]["container_config"] = {
+                "shm_size": f"{shm_size_mb}m",
+                "runtime": "nvidia",
+                "gpus": "all"
+            }
     else:
         boto_session = boto3.session.Session(region_name=region)
         sagemaker_client = boto_session.client(service_name="sagemaker", region_name=region)

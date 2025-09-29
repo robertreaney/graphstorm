@@ -168,8 +168,6 @@ def train(config_args, train_data):
     return model, task_evaluators, test_dataloader, trainer
 
 def main(config_args):
-    if not bool(os.environ['RESONATE']):
-        raise EnvironmentError('need resonate environment for custom code')
     ## main from training script graphstorm.
     config = GSConfig(config_args)
     config.verify_arguments(True)

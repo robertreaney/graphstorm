@@ -25,6 +25,8 @@ import subprocess
 import time
 from typing import Optional
 from urllib.parse import urlparse
+import torch as th
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 from botocore.errorfactory import ClientError
@@ -214,9 +216,32 @@ def download_model(model_artifact_s3, model_path, sagemaker_session):
                            f"model.bin from {model_artifact_s3}." \
                            f"{err}")
 
+def download_s3_folder(s3_uri: str, local_dir: str, sagemaker_session, workers: int = 20):
+    """Download all files under s3_uri into local_dir using S3Downloader in parallel."""
+    # List all files first
+    uris = S3Downloader.list(s3_uri, sagemaker_session=sagemaker_session)
+
+    uris = [x for x in uris if x.endswith("ldb")]
+
+    def download_one(uri):
+        rel_path = os.path.relpath(uri, s3_uri)
+        local_path = os.path.join(local_dir, rel_path)
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        S3Downloader.download(uri, local_path, sagemaker_session=sagemaker_session)
+        return uri
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(download_one, u): u for u in uris}
+        for f in as_completed(futures):
+            try:
+                f.result()
+            except Exception as e:
+                logging.warning("Failed to download: %s (%s)", futures[f], e)
+                raise e
+
 def download_graph(graph_data_s3, graph_name, part_id, world_size,
                    local_path, sagemaker_session,
-                   raw_node_mapping_prefix_s3=None):
+                   raw_node_mapping_prefix_s3=None, training=True):
     """ download graph data
 
     Parameters
@@ -235,6 +260,8 @@ def download_graph(graph_data_s3, graph_name, part_id, world_size,
         sagemaker_session to run download
     raw_node_mapping_prefix_s3: str, optional
         S3 prefix to where the node_id_mapping data are stored
+    training: bool
+        Whether the graph is being downloaded for training (needs kv-cache) or inference.
 
     Return
     ------
@@ -357,7 +384,33 @@ def download_graph(graph_data_s3, graph_name, part_id, world_size,
             logging.warning("Could not download node id remap file %s",
                             mapping_file)
 
-    logging.info("Finished downloading graph data from %s", graph_data_s3)
+    # download key-value cache
+    if training:
+        kv_cache_s3 = os.path.join(graph_data_s3, "levelsdb0")
+        local_kv_cache_path = os.path.join(graph_path, "levelsdb0")
+        os.makedirs(local_kv_cache_path, exist_ok=True)
+        try:
+            logging.info("Download graph kv cache from %s to %s",
+                        kv_cache_s3,
+                        local_kv_cache_path)
+            download_s3_folder(kv_cache_s3, local_kv_cache_path, sagemaker_session, workers=10)
+
+        except Exception as err:  # pylint: disable=broad-except
+            logging.warning(
+                "Can not download graph kv cache from %s. %s",
+                kv_cache_s3,
+                str(err)
+            )
+            raise err
+        
+        num_gpus = th.cuda.device_count()
+        logging.info('Copying Labels-Cache for %d GPUs', num_gpus)
+
+        for i in range(1, num_gpus):
+            local_kv_cache_path_copy = os.path.join(graph_path, f"levelsdb{i}")
+            shutil.copytree(local_kv_cache_path, local_kv_cache_path_copy, dirs_exist_ok=True)
+
+    logging.info("Finished downloading graph data from %s with contents %s", graph_data_s3, os.listdir(graph_path))
     return os.path.join(graph_path, graph_config)
 
 
