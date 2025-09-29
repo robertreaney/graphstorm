@@ -16,8 +16,6 @@
     GraphStorm trainer for multi-task learning.
 """
 from ctypes import ArgumentError
-import os
-import glob
 import time
 import resource
 import logging
@@ -25,8 +23,7 @@ import torch as th
 from pathlib import Path
 import plyvel
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pandas as pd
 
 from torch.nn.parallel import DistributedDataParallel
 # import optuna
@@ -43,6 +40,7 @@ from ..utils import barrier, is_distributed
 from ..model.gnn_encoder_base import prepare_for_wholegraph
 from ..model.utils import append_to_dict
 from ..utils import is_distributed, get_rank, is_wholegraph
+from graphstorm.gconstruct.id_map import IdReverseMap
 
 
 BATCH_FRAC = .5
@@ -64,50 +62,88 @@ def get_cached_labels(database, fake_labels, device):
     return th.tensor(np.array(labels, dtype=np.int32), dtype=th.int32).to(device)
 
 
-def safe_cat(tensor_list, save_dir=".data/temp", prefix="preds", dtype=th.float32):
-    """
-    Memory-safe replacement for torch.cat(list_of_tensors).
-    Uses Parquet as intermediate storage to avoid OOM.
+def resonate_mini_batch_gnn_predict_wild(model, loader, task_id, save_prediction_path,node_id_mapping_file):
+    if get_rank() == 0:
+        logging.debug("Perform mini-batch inference for resonate prediction.")
+    device = model.device
+    data = loader.data
+    g = data.g
+    preds = {}
+    target_ntypes = set(loader.target_nidx.keys())
+    if len(target_ntypes) > 1:
+        raise ValueError('Cannot handle multiple ntypes in wild inference for one forward pass. directory structure for saves depends on taskid being specific to a single node type for save')
+    target = list(target_ntypes)[0]
 
-    Args:
-        tensor_list: list of torch.Tensors [N_i, D]
-        save_dir: where to write temporary parquet files
-        prefix: file name prefix
-        dtype: dtype of final tensor
+    out_dir = Path(save_prediction_path) / task_id / target
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    Returns:
-        torch.Tensor of shape [sum(N_i), D]
-    """
-    os.makedirs(save_dir, exist_ok=True)
+    len_dataloader = max_num_batch = len(loader)
+    tensor = th.tensor([len_dataloader], device=device)
+    if is_distributed():
+        th.distributed.all_reduce(tensor, op=th.distributed.ReduceOp.MAX)
+        max_num_batch = tensor[0]
 
-    # 1. Write each tensor to a parquet file
-    # for i, t in enumerate(tensor_list):
-    #     arr = t.detach().cpu().numpy()
-    #     columns = [pa.array(arr[:, j]) for j in range(arr.shape[1])]
-    #     names = [f"dim{j}" for j in range(arr.shape[1])]
-    #     table = pa.Table.from_arrays(columns, names=names)
-    #     pq.write_table(table, os.path.join(save_dir, f"{prefix}_{i}.parquet"))
-    # del arr, table, columns
-    del tensor_list
+    dataloader_iter = iter(loader)
+    if get_rank() == 0:
+        logging.info(f"Starting inference with {max_num_batch} batches")
 
-    # 2. Reload parquet files and preallocate final tensor
-    files = sorted(glob.glob(os.path.join(save_dir, f"{prefix}_*.parquet")))
-    sample_table = pq.read_table(files[0])
-    num_cols = len(sample_table.column_names)
-    total_rows = sum(pq.read_metadata(f).num_rows for f in files)
+    # mapping
+    node_mapping = th.load(node_id_mapping_file)
+    p = (Path(node_id_mapping_file).parent / 'raw_id_mappings' / target).as_posix()
+    id_mapper = IdReverseMap(p)
 
-    big_tensor = th.empty((total_rows, num_cols), dtype=dtype)
+    with th.no_grad():
+        # WholeGraph does not support imbalanced batch numbers across processes/trainers
+        # TODO (IN): Fix dataloader to have the same number of minibatches
+        for iter_l in range(max_num_batch):
+            iter_start = time.time()
+            tmp_keys = []
+            blocks = None
+            if iter_l < len_dataloader:
+                input_nodes, seeds, blocks = next(dataloader_iter)
+                if not isinstance(input_nodes, dict):
+                    assert len(g.ntypes) == 1
+                    input_nodes = {g.ntypes[0]: input_nodes}
+            if is_wholegraph():
+                tmp_keys = [ntype for ntype in g.ntypes if ntype not in input_nodes]
+                prepare_for_wholegraph(g, input_nodes)
+            nfeat_fields = loader.node_feat_fields
+            node_input_feats = data.get_node_feats(input_nodes, nfeat_fields, device)
+            # Since v0.4, add the edge features as one input
+            # efeat_fields = loader.edge_feat_fields
+            # edge_input_feats = data.get_blocks_edge_feats(blocks, efeat_fields, device)
 
-    # 3. Fill tensor incrementally
-    offset = 0
-    for f in files:
-        table = pq.read_table(f)
-        arr = np.column_stack([table[col].to_numpy() for col in table.column_names])
-        n = arr.shape[0]
-        big_tensor[offset:offset+n] = th.from_numpy(arr)
-        offset += n
+            if blocks is None:
+                continue
+            # Remove additional keys (ntypes) added for WholeGraph compatibility
+            for ntype in tmp_keys:
+                del input_nodes[ntype]
+            blocks = [block.to(device) for block in blocks]
+            
+            
+            encoder_data = (blocks, node_input_feats, '', input_nodes)
+            mini_batch = (encoder_data, '')
+            pred = model.predict(task_id, mini_batch, True)
 
-    return big_tensor
+            # save preds and seeds
+            ids = node_mapping[target][seeds[target]]
+            original_ids = id_mapper.map_id(ids)
+
+            df = pd.DataFrame({
+                'nid': original_ids,
+                'pred': list(pred[target].cpu().numpy()),
+                'bottleneck': list(node_input_feats[target][:len(seeds[target])].cpu().numpy())
+            })
+
+
+            df.to_parquet(out_dir / f"predict-r{get_rank():01d}-b{iter_l:05d}.parquet")
+
+            if get_rank() == 0 and iter_l % 5 == 0:
+                logging.info("iter %d out of %d: takes %.3f seconds",
+                              iter_l, max_num_batch, time.time() - iter_start)
+            
+    return out_dir
+
 
 def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, return_label=True, database=None):
     """ Perform mini-batch prediction on a GNN model.
@@ -217,22 +253,17 @@ def resonate_mini_batch_gnn_predict(model, loader, task_id, return_proba=True, r
             
     # TODO this concat breaks in daily inference if graphs are too big
     # MFG for DGL 2.0.0+ return all node and edge type
-    # if database is not None: # during training we dont have to worry about RAM consumption
-    #     preds = {
-    #         ntype: th.cat(preds[ntype])
-    #         for ntype in preds if ntype in target_ntypes
-    #     }
-    # else:
-    #     # during inference a th.cat will explode RAM
-    #     preds = {
-    #         ntype: safe_cat(preds[ntype], prefix=f"preds_rank{get_rank()}_{ntype}")
-    #         for ntype in preds if ntype in target_ntypes
-    #     }
-
-    preds = {
-        ntype: th.cat(preds[ntype])
-        for ntype in preds if ntype in target_ntypes
-    }
+    if database is not None: # during training we dont have to worry about RAM consumption
+        preds = {
+            ntype: th.cat(preds[ntype])
+            for ntype in preds if ntype in target_ntypes
+        }
+    else:
+        # during inference a th.cat will explode RAM
+        preds = {
+            ntype: safe_cat(preds[ntype], prefix=f"preds_rank{get_rank()}_{ntype}")
+            for ntype in preds if ntype in target_ntypes
+        }
 
     for ntype, ntype_label in labels.items():
         labels[ntype] = th.cat(ntype_label)

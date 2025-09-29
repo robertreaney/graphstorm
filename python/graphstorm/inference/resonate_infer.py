@@ -45,10 +45,10 @@ from ..model.lp_gnn import run_lp_mini_batch_predict
 from ..model.edge_decoder import LinkPredictDistMultDecoder
 
 from ..utils import sys_tracker, get_rank, barrier
-from ..trainer.resonate_trainer import resonate_mini_batch_gnn_predict
+from ..trainer.resonate_trainer import resonate_mini_batch_gnn_predict, resonate_mini_batch_gnn_predict_wild
 
 
-def get_predictions(model, mt_loader, use_mini_batch_infer=True, database=None):
+def get_predictions(model, mt_loader, use_mini_batch_infer=True, database=None, save_prediction_path=None, node_id_mapping_file=None):
     if not use_mini_batch_infer:
         raise NotImplementedError("Full graph inference is not supported yet.")
     test_start = time.time()
@@ -60,7 +60,11 @@ def get_predictions(model, mt_loader, use_mini_batch_infer=True, database=None):
     results = dict()
 
     for loader, task_info in zip(loaders, task_infos):
-        pred, label = resonate_mini_batch_gnn_predict(model, loader, task_info.task_id, True, database=database)
+        if database is not None:
+            pred, label = resonate_mini_batch_gnn_predict(model, loader, task_info.task_id, True, database=database)
+        else:
+            pred = resonate_mini_batch_gnn_predict_wild(model=model, loader=loader, task_id=task_info.task_id, save_prediction_path=save_prediction_path, node_id_mapping_file=node_id_mapping_file)
+            label = {}
         results[task_info.task_id] = (pred, label)
 
     return results
@@ -77,12 +81,12 @@ class ResonateInferrer(GSInferrer):
     model : GSgnnMultiTaskModel
         The GNN model for prediction.
     """
-    def __init__(self, model, part_config, cached_labels=True):
+    def __init__(self, model, part_config=None, cached_labels=True):
         super().__init__(model)
         
-        self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
 
         if cached_labels:
+            self.labels_path = Path(part_config).parent / f'levelsdb{get_rank()}'
             try:
                 self.db = plyvel.DB(
                     self.labels_path.as_posix(),
@@ -98,6 +102,70 @@ class ResonateInferrer(GSInferrer):
                 raise e
         else:
             self.db = None
+
+
+    # pylint: disable=unused-argument
+    def infer_safe(self, data,
+              predict_test_loader: Optional[GSgnnMultiTaskDataLoader] = None,
+              save_embed_path=None,
+              save_prediction_path=None,
+              node_id_mapping_file=None,
+              return_proba=True,
+              save_embed_format="pytorch",
+              infer_batch_size=1024):
+
+        do_eval = self.evaluator is not None
+        sys_tracker.check('start inferencing')
+        model = self._model
+        model.eval()
+
+        # All the tasks share the same GNN encoder so the fanouts are same
+        # for different tasks.
+        fanout = None
+        if predict_test_loader is not None:
+            for task_fanout in predict_test_loader.fanout:
+                if task_fanout is not None:
+                    fanout = task_fanout
+                    break
+        else:
+            raise ValueError("All the test data loaders are None.")
+
+        sys_tracker.check('compute embeddings')
+        device = self.device
+
+        g = data.g
+        # Note(xiangsx): Save embeddings should happen
+        # before conducting prediction results.
+        
+        barrier()
+
+        # As re-computing node embeddings, for reconstruct node
+        # feature evaluation and link prediction evaluation,
+        # will directly update the underlying DistTensors,
+        # we have to do the evaluation (prediction) of each
+        # task in the following priority:
+        # 1. node and edge prediction tasks (classificaiton/regression)
+        # 2. node feature reconstruction (as it has the chance
+        #    to reuse the node embeddings generated at the beginning)
+        # 3. link prediction.
+        pre_results: Dict[str, Any] = {}
+        test_lengths = None
+
+        if predict_test_loader is None:
+            logging.warning("There is no prediction tasks."
+                            "Will skip saving prediction results.")
+            return
+
+        logging.info("Saving prediction results")
+
+        if predict_test_loader is not None:
+            # compute prediction results for node classification,
+            # node regressoin, edge classification
+            # and edge regression tasks.
+            get_predictions(model, predict_test_loader, database=self.db, save_prediction_path=save_prediction_path, node_id_mapping_file=node_id_mapping_file)
+
+        return
+
 
     # pylint: disable=unused-argument
     def infer(self, data,
@@ -183,7 +251,7 @@ class ResonateInferrer(GSInferrer):
             pre_results = \
                 get_predictions(model, predict_test_loader, database=self.db)
 
-        if do_eval:
+        if do_eval and self.database is not None:
             test_start = time.time()
             assert isinstance(self.evaluator, GSgnnMultiTaskEvaluator)
 

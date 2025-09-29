@@ -684,7 +684,8 @@ def process_node_data(process_confs, arr_merger, remap_id,
         for data in node_data[node_type].values():
             assert len(data) == len(node_id_map[node_type]), \
                     f"Node data and node IDs for node type {node_type} does not match: " + \
-                    f"{len(data)} vs. {len(node_id_map[node_type])}"
+                    f"{len(data)} vs. {len(node_id_map[node_type])}" + \
+                    " Missing columns for some IDs or duplicate IDs are common causes."
     sys_tracker.check('Finish processing node data')
     return (node_id_map, node_data, label_stats, label_masks)
 

@@ -17,7 +17,7 @@
 """
 import os
 import logging
-
+from pathlib import Path
 import graphstorm as gs
 from graphstorm.config import get_argument_parser
 from graphstorm.config import GSConfig
@@ -34,7 +34,7 @@ from graphstorm.dataloading import (GSgnnNodeDataLoader,
                                     GSgnnMultiTaskDataLoader)
 from graphstorm.eval import GSgnnMultiTaskEvaluator
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import GSgnnMultiTaskLearningTrainer
+from graphstorm.trainer import ResonateMultiTaskTrainer
 from graphstorm.model.utils import save_full_node_embeddings
 from graphstorm.model import do_full_graph_inference
 
@@ -423,7 +423,14 @@ def main(config_args):
                          sparse_optimizer_lr=config.sparse_optimizer_lr,
                          weight_decay=config.wd_l2norm,
                          lm_lr=config.lm_tune_lr)
-    trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
+
+    # print directory structure
+    if gs.get_rank() == 0:
+        p = Path(config.part_config).parent
+        files = list(p.iterdir())
+        logging.info("Data directory %s has files: %s", p, files)
+
+    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save, part_config=config.part_config)
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
                                             task_evaluators,
@@ -471,7 +478,7 @@ def main(config_args):
 
         # test out mermaid diagram
         try:
-            save_mermaid_diagram(model, "model_diagram.md", tasks)
+            save_mermaid_diagram(model, Path(save_model_path).parent / "model_diagram.md", tasks)
             logging.info("Saved model diagram to model_diagram.md")
         except Exception as e:
             logging.warning("Failed to save model diagram: %s", e)
@@ -482,7 +489,7 @@ def main(config_args):
 
     trainer.fit(train_loader=train_dataloader,
                 val_loader=val_dataloader,
-                test_loader=test_dataloader,
+                # test_loader=test_dataloader,
                 num_epochs=config.num_epochs,
                 save_model_path=save_model_path,
                 use_mini_batch_infer=config.use_mini_batch_infer,
@@ -552,6 +559,7 @@ def generate_parser():
     return parser
 
 if __name__ == '__main__':
+    
     arg_parser = generate_parser()
 
     # Ignore unknown args to make script more robust to input arguments

@@ -3,23 +3,17 @@ import os
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import logging
-from shutil import copy2
-from pathlib import Path
 import graphstorm as gs
 from graphstorm.config import GSConfig, get_argument_parser
 from graphstorm.config import BUILTIN_TASK_LINK_PREDICTION
 from graphstorm.dataloading import GSgnnMultiTaskDataLoader, GSgnnData
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import ResonateMultiTaskTrainer
-from graphstorm.eval import GSgnnMultiTaskEvaluator
 from graphstorm.inference import ResonateInferrer
+from graphstorm.eval import GSgnnMultiTaskEvaluator
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
-from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
-from graphstorm.model_introspection import save_mermaid_diagram
+from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_test_dataloader
 
 def main(config_args):
-    if not bool(os.environ['RESONATE']):
-        raise EnvironmentError('need resonate environment for custom code')
     ## main from training script graphstorm.
     config = GSConfig(config_args)
     config.verify_arguments(True)
@@ -35,12 +29,12 @@ def main(config_args):
 
 
     ## LOAD DATA ##
+
     # THIS IS THE EXPENSIVE CALL
     train_data = GSgnnData(config.part_config,
                             node_feat_field=config.node_feat_name,
                             edge_feat_field=config.edge_feat_name,
                             lm_feat_ntypes=get_lm_ntypes(config.node_lm_configs))
-
     ##########################################
     ##########################################
     ##########################################
@@ -105,14 +99,15 @@ def main(config_args):
     model = model.to(get_device())
     
     ### INFERENCE CODE
-    infer = ResonateInferrer(model, part_config=config.part_config)
+    infer = ResonateInferrer(model, part_config=config.part_config, cached_labels=False)
 
-    if not config.no_validation:
-        evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)
-        infer.setup_evaluator(evaluator)
+
+    evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)
+    infer.setup_evaluator(evaluator)
+
 
     infer.setup_device(device=get_device())
-    infer.infer(train_data,
+    infer.infer_safe(train_data,
                 test_dataloader, 
                 save_embed_path=config.save_embed_path,
                 save_prediction_path=config.save_prediction_path,
