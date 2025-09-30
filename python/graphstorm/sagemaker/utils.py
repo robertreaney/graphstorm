@@ -386,27 +386,27 @@ def download_graph(graph_data_s3, graph_name, part_id, world_size,
 
     # download key-value cache
     if training:
-        kv_cache_s3 = os.path.join(graph_data_s3, "levelsdb0")
-        local_kv_cache_path = os.path.join(graph_path, "levelsdb0")
-        os.makedirs(local_kv_cache_path, exist_ok=True)
-        try:
-            logging.info("Download graph kv cache from %s to %s",
-                        kv_cache_s3,
-                        local_kv_cache_path)
-            download_s3_folder(kv_cache_s3, local_kv_cache_path, sagemaker_session, workers=10)
+        # kv_cache_s3 = os.path.join(graph_data_s3, "levelsdb0")
+        local_kv_cache_path = os.path.join("/resonate", "levelsdb")
+        # os.makedirs(local_kv_cache_path, exist_ok=True)
+        # try:
+        #     logging.info("Download graph kv cache from %s to %s",
+        #                 kv_cache_s3,
+        #                 local_kv_cache_path)
+        #     download_s3_folder(kv_cache_s3, local_kv_cache_path, sagemaker_session, workers=10)
 
-        except Exception as err:  # pylint: disable=broad-except
-            logging.warning(
-                "Can not download graph kv cache from %s. %s",
-                kv_cache_s3,
-                str(err)
-            )
-            raise err
+        # except Exception as err:  # pylint: disable=broad-except
+        #     logging.warning(
+        #         "Can not download graph kv cache from %s. %s",
+        #         kv_cache_s3,
+        #         str(err)
+        #     )
+        #     raise err
         
         num_gpus = th.cuda.device_count()
         logging.info('Copying Labels-Cache for %d GPUs', num_gpus)
 
-        for i in range(1, num_gpus):
+        for i in range(num_gpus):
             local_kv_cache_path_copy = os.path.join(graph_path, f"levelsdb{i}")
             shutil.copytree(local_kv_cache_path, local_kv_cache_path_copy, dirs_exist_ok=True)
 

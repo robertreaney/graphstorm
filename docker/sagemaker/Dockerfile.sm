@@ -62,6 +62,8 @@ RUN cd /root; git clone --branch v${DGL_VERSION} --single-branch https://github.
 # Un-comment if we prefer a local DGL distribution
 # COPY dgl /root/dgl
 
+COPY .data/hem_rcid/graph/levelsdb /resonate/levelsdb
+
 ENV PYTHONPATH="/root/dgl/tools/:${PYTHONPATH}"
 ENV RESONATE=true
 
