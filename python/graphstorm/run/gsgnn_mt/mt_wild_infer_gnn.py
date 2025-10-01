@@ -99,7 +99,7 @@ def main(config_args):
     model = model.to(get_device())
     
     ### INFERENCE CODE
-    infer = ResonateInferrer(model, part_config=config.part_config, cached_labels=True)
+    infer = ResonateInferrer(model, part_config=config.part_config, cached_labels=False)
 
 
     evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency, task_evaluators)
@@ -107,7 +107,7 @@ def main(config_args):
 
 
     infer.setup_device(device=get_device())
-    infer.infer(train_data,
+    infer.infer_safe(train_data,
                 test_dataloader, 
                 save_embed_path=config.save_embed_path,
                 save_prediction_path=config.save_prediction_path,

@@ -1240,22 +1240,11 @@ def get_argument_parser():
               Used with built-in training/inference scripts"
     )
     parser.add_argument(
-        "--tune",
+        "--wild-inference",
         action="store_true",
-        help="Indicate that a task is a hyperparameter tuning routine."
+        help="Inidcate that it is a wild inference task. \
+              Used with built-in training/inference scripts"
     )
-    # parser.add_argument(
-    #     "--study-name",
-    #     type=str,
-    #     help="The name of the Optuna study.",
-    #     default=datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    # )
-    # parser.add_argument(
-    #     "--study-n-trials",
-    #     type=int,
-    #     help="The number of trials for the Optuna study.",
-    #     default=25
-    # )
     parser.add_argument(
         "--lm-encoder-only",
         action="store_true",

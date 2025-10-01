@@ -251,7 +251,7 @@ class ResonateInferrer(GSInferrer):
             pre_results = \
                 get_predictions(model, predict_test_loader, database=self.db)
 
-        if do_eval and self.database is not None:
+        if do_eval and self.db is not None:
             test_start = time.time()
             assert isinstance(self.evaluator, GSgnnMultiTaskEvaluator)
 
