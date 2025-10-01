@@ -179,7 +179,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
 
     container_image_uri = image
 
-    prefix = f"graphstorm/gs-hpo-{args.graph_name}"
+    prefix = f"graphstorm-hpo-{args.graph_name}-{args.task_name}"
 
     params = {
         "eval-metric": args.metric_name,
@@ -236,6 +236,10 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
         tags=[
             {"Key": "GraphStorm", "Value": "oss"},
             {"Key": "GraphStorm_Task", "Value": "HPO"},
+            {"Key": "Team", "Value": "GUARDIANS"},
+            {"Key": "Process", "Value": "RREANEY-RESEARCH-SANDBOXES"},
+            {"Key": "Service", "Value": "DeepLearning"},
+            {"Key": "Environment", "Value": "Dev"},
         ],
         keep_alive_period_in_seconds=600,
         sagemaker_session=create_sm_session(args.instance_type, args.region),
@@ -334,14 +338,14 @@ def get_hpo_parser():
     hpo_group.add_argument(
         "--hb-min-epochs",
         type=int,
-        default=1,
-        help="Minimum number of epochs for Hyperband strategy. Default: 1",
+        default=3,
+        help="Minimum number of epochs for Hyperband strategy. Default: 3",
     )
     hpo_group.add_argument(
         "--hb-max-epochs",
         type=int,
-        default=20,
-        help="Maximum number of epochs for Hyperband strategy. Default: 20",
+        default=25,
+        help="Maximum number of epochs for Hyperband strategy. Default: 25",
     )
 
     return parser

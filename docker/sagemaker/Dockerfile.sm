@@ -44,6 +44,8 @@ RUN pip3 install \
         plyvel==1.5.1 \
     && rm -rf /root/.cache
 
+# RESONATE copy in training labels kv cache
+COPY .data/hem_rcid/graph/levelsdb /resonate/levelsdb
 
 # Copy workaround script for incorrect hostname
 COPY build_artifacts/changehostname.c /usr/local/bin/changehostname.c
@@ -62,7 +64,6 @@ RUN cd /root; git clone --branch v${DGL_VERSION} --single-branch https://github.
 # Un-comment if we prefer a local DGL distribution
 # COPY dgl /root/dgl
 
-COPY .data/hem_rcid/graph/levelsdb /resonate/levelsdb
 
 ENV PYTHONPATH="/root/dgl/tools/:${PYTHONPATH}"
 ENV RESONATE=true

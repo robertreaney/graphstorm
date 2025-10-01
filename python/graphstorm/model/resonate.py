@@ -14,7 +14,7 @@ logger = sl.get_logger(__name__)
 class AttentionBlock(Module):
     def __init__(self, dim_model, dim_key, dim_value, dim_ffn, attention_heads, dropout_rate_attention=.05, **kwargs):
         super(AttentionBlock, self).__init__()
-        self.dim_model = dim_model
+        self.dim_model = dim_model // 2 * 2  # this has to be even
         self.dim_key = dim_key
         self.dim_value = dim_value
         self.dim_ffn = dim_ffn

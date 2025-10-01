@@ -659,6 +659,44 @@ class GSConfig:
                 # for basic attributes
                 setattr(self, f"_{arg_key}", arg_val)
 
+        # Auto-adjust fanout/eval_fanout when num_layers changes
+        num_layers = cmd_args_dict.get("num_layers")
+        if num_layers:
+            for fanout_attr in ["_fanout", "_eval_fanout"]:
+                if hasattr(self, fanout_attr):
+                    fanout_val = getattr(self, fanout_attr)
+                    # If fanout is a single integer, expand it to num_layers
+                    if "," not in str(fanout_val):
+                        setattr(self, fanout_attr, ",".join([str(fanout_val)] * num_layers))
+                    else:
+                        # If fanout length doesn't match num_layers, use first value
+                        old = fanout_val.split(",")
+                        if len(old) != num_layers:
+                            setattr(self, fanout_attr, ",".join([old[0]] * num_layers))
+
+        # Auto-adjust hidden_size to be divisible by num_heads for attention-based encoders
+        hidden_size = cmd_args_dict.get("hidden_size")
+        if hidden_size and hasattr(self, "_model_encoder_type"):
+            encoder_type = getattr(self, "_model_encoder_type", None)
+            if encoder_type in ["rgat", "gat", "gatv2", "hgt"]:
+                # Get num_heads from override or use default (4)
+                num_heads = cmd_args_dict.get("num_heads")
+                if num_heads is None:
+                    num_heads = getattr(self, "_num_heads", 4)
+
+                if hidden_size % num_heads != 0:
+                    # Round to nearest multiple of num_heads
+                    adjusted = round(hidden_size / num_heads) * num_heads
+                    # Ensure we don't round to 0
+                    if adjusted == 0:
+                        adjusted = num_heads
+                    logging.warning(
+                        f"hidden_size {hidden_size} is not divisible by num_heads {num_heads} "
+                        f"for {encoder_type} encoder. Auto-adjusting to {adjusted} to avoid "
+                        f"dimension mismatch in attention layers."
+                    )
+                    setattr(self, "_hidden_size", adjusted)
+
     def verify_node_feat_reconstruct_arguments(self):
         """Verify the correctness of arguments for node feature reconstruction tasks.
 
