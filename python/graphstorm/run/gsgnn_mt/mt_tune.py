@@ -21,7 +21,7 @@
 # from graphstorm.inference import ResonateInferrer
 # from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 # from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
-# from graphstorm.model_introspection import save_mermaid_diagram
+# from src.model_introspection import save_mermaid_diagram
 # from graphstorm.utils import barrier, is_distributed
 # from torch.distributed import broadcast, all_reduce, ReduceOp
 # import optuna

@@ -40,7 +40,8 @@ from graphstorm.model import do_full_graph_inference
 
 from graphstorm.utils import rt_profiler, sys_tracker, get_device, use_wholegraph
 from graphstorm.utils import get_lm_ntypes
-from graphstorm.model_introspection import save_mermaid_diagram
+
+from src.model_introspection import save_mermaid_diagram
 
 def create_task_train_dataloader(task, config, train_data):
     """ Create task specific dataloader for training tasks

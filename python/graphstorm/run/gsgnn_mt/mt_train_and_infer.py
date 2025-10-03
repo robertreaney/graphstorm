@@ -1,10 +1,6 @@
 """This script will do training & inference on best-fit model for multitask to avoid loading the model twice."""
 import os
-import os
-
-from graphstorm.inference.resonate_infer import ResonateInferrer
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-
 import logging
 from shutil import copy2
 from pathlib import Path
@@ -18,7 +14,8 @@ from graphstorm.eval import GSgnnMultiTaskEvaluator
 from graphstorm.inference import ResonateInferrer
 from graphstorm.utils import get_device, rt_profiler, sys_tracker, get_device, get_lm_ntypes
 from graphstorm.run.gsgnn_mt.gsgnn_mt import create_task_train_dataloader, create_task_val_dataloader, create_task_test_dataloader
-from graphstorm.model_introspection import save_mermaid_diagram
+
+from src.model_introspection import save_mermaid_diagram
 
 RANDOM_BASELINE=False
 CACHED_LABELS=True
