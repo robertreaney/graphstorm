@@ -2141,7 +2141,7 @@ class GSgnnMultiTaskEvaluator(GSgnnBaseEvaluator, GSgnnMultiTaskEvalInterface):
     def __init__(self, eval_frequency, task_evaluators,
                  use_early_stop=False,
                  early_stop_burnin_rounds=0,
-                 early_stop_rounds=3,
+                 early_stop_rounds=10,
                  early_stop_strategy=EARLY_STOP_AVERAGE_INCREASE_STRATEGY):
         # nodes whose embeddings are used during evaluation
         # if None all nodes are used.
