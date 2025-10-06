@@ -2,8 +2,6 @@
 *~
 *#
 *.swp
-*.so
-*.o
 
 # mac-specific
 *.DS_Store
