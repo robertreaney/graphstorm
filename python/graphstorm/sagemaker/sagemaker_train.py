@@ -106,9 +106,9 @@ def launch_train_task(task_type, num_gpus, graph_config,
         "--extra-envs", f"LD_LIBRARY_PATH={os.environ['LD_LIBRARY_PATH']} ",
         "--ssh-port", "22",
         "--do-nid-remap", "False", # No need to do nid map in SageMaker trianing.
-        "--use-graphbolt", "true"
         ]
     launch_cmd += [custom_script] if custom_script is not None else []
+    launch_cmd += ["--use-graphbolt", "true"]  # Moved here for custom scripts
     launch_cmd += ["--cf", f"{yaml_path}",
         "--save-model-path", f"{save_model_path}"]
     launch_cmd += ["--restore-model-path", f"{restore_model_path}"] \

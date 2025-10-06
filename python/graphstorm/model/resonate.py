@@ -4,11 +4,8 @@ import torch.nn as nn
 from torch.nn import Linear, LayerNorm, MultiheadAttention, ModuleList, Sequential, Module, ReLU, GELU, Identity
 from torch.nn.functional import relu, dropout, gelu
 from torch.distributions.normal import Normal
-import numpy as np
 
-import structlog as sl
-
-logger = sl.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # HMA
 class AttentionBlock(Module):
