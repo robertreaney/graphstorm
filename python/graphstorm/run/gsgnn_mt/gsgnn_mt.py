@@ -17,7 +17,7 @@
 """
 import os
 import logging
-from pathlib import Path
+
 import graphstorm as gs
 from graphstorm.config import get_argument_parser
 from graphstorm.config import GSConfig
@@ -34,13 +34,12 @@ from graphstorm.dataloading import (GSgnnNodeDataLoader,
                                     GSgnnMultiTaskDataLoader)
 from graphstorm.eval import GSgnnMultiTaskEvaluator
 from graphstorm.model.multitask_gnn import GSgnnMultiTaskSharedEncoderModel
-from graphstorm.trainer import ResonateMultiTaskTrainer
+from graphstorm.trainer import GSgnnMultiTaskLearningTrainer
 from graphstorm.model.utils import save_full_node_embeddings
 from graphstorm.model import do_full_graph_inference
 
 from graphstorm.utils import rt_profiler, sys_tracker, get_device, use_wholegraph
 from graphstorm.utils import get_lm_ntypes
-from graphstorm.model_introspection import save_mermaid_diagram
 
 def create_task_train_dataloader(task, config, train_data):
     """ Create task specific dataloader for training tasks
@@ -368,7 +367,7 @@ def main(config_args):
                            node_feat_field=config.node_feat_name,
                            edge_feat_field=config.edge_feat_name,
                            lm_feat_ntypes=get_lm_ntypes(config.node_lm_configs))
-    model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm, config.use_model_residuals)
+    model = GSgnnMultiTaskSharedEncoderModel(config.alpha_l2norm)
     gs.gsf.set_encoder(model, train_data.g, config, train_task=True)
 
     tasks = config.multi_tasks
@@ -423,14 +422,7 @@ def main(config_args):
                          sparse_optimizer_lr=config.sparse_optimizer_lr,
                          weight_decay=config.wd_l2norm,
                          lm_lr=config.lm_tune_lr)
-
-    # print directory structure
-    if gs.get_rank() == 0:
-        p = Path(config.part_config).parent
-        files = list(p.iterdir())
-        logging.info("Data directory %s has files: %s", p, files)
-
-    trainer = ResonateMultiTaskTrainer(model, topk_model_to_save=config.topk_model_to_save, part_config=config.part_config)
+    trainer = GSgnnMultiTaskLearningTrainer(model, topk_model_to_save=config.topk_model_to_save)
     if not config.no_validation:
         evaluator = GSgnnMultiTaskEvaluator(config.eval_frequency,
                                             task_evaluators,
@@ -455,41 +447,12 @@ def main(config_args):
 
     tracker = gs.create_builtin_task_tracker(config)
     if gs.get_rank() == 0:
-        # add model summary here
-        try:
-            total_params = sum(p.numel() for p in model.parameters())
-            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        except Exception:
-            total_params = None
-            trainable_params = None
-
-        logging.info("Model summary:\n%s", model)
-        if total_params is not None:
-            logging.info("Parameters | total: %s | trainable: %s",
-                         f"{total_params:,}", f"{trainable_params:,}")
-            
-            # print parameters per child module
-            for name, child in model.named_children():
-                params = [p for p in child.parameters() if p.requires_grad]
-                n_params = sum(p.numel() for p in params)
-                logging.info("  %-30s params=%s", name, f"{n_params:,}")
-                
-        logging.info("Configured tasks: %s", ", ".join([t.task_id for t in tasks]))
-
-        # test out mermaid diagram
-        try:
-            save_mermaid_diagram(model, Path(save_model_path).parent / "model_diagram.md", tasks)
-            logging.info("Saved model diagram to model_diagram.md")
-        except Exception as e:
-            logging.warning("Failed to save model diagram: %s", e)
-
-        # stop model summary
         tracker.log_params(config.__dict__)
     trainer.setup_task_tracker(tracker)
 
     trainer.fit(train_loader=train_dataloader,
                 val_loader=val_dataloader,
-                # test_loader=test_dataloader,
+                test_loader=test_dataloader,
                 num_epochs=config.num_epochs,
                 save_model_path=save_model_path,
                 use_mini_batch_infer=config.use_mini_batch_infer,
@@ -559,7 +522,6 @@ def generate_parser():
     return parser
 
 if __name__ == '__main__':
-    
     arg_parser = generate_parser()
 
     # Ignore unknown args to make script more robust to input arguments

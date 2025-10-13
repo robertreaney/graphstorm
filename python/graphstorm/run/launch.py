@@ -20,7 +20,6 @@
     python3 -m graphstorm.run.launch <Launch args> YOUR_SCRIPT.py <Train/Infer args>
 """
 import argparse
-import datetime
 import json
 import logging
 import multiprocessing
@@ -1231,18 +1230,6 @@ def get_argument_parser():
         "--inference",
         action="store_true",
         help="Inidcate that it is a inference task. \
-              Used with built-in training/inference scripts"
-    )
-    parser.add_argument(
-        "--train-and-infer",
-        action="store_true",
-        help="Indicate that it is a train and inference task. \
-              Used with built-in training/inference scripts"
-    )
-    parser.add_argument(
-        "--wild-inference",
-        action="store_true",
-        help="Inidcate that it is a wild inference task. \
               Used with built-in training/inference scripts"
     )
     parser.add_argument(
