@@ -48,7 +48,6 @@ from .config import (BUILTIN_LP_LOSS_CROSS_ENTROPY,
                      BUILTIN_LP_LOSS_CONTRASTIVELOSS,
                      BUILTIN_LP_LOSS_BPR,
                      BUILTIN_CLASS_LOSS_CROSS_ENTROPY,
-                     BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED,
                      BUILTIN_CLASS_LOSS_FOCAL,
                      BUILTIN_REGRESSION_LOSS_MSE,
                      BUILTIN_REGRESSION_LOSS_SHRINKAGE)
@@ -72,7 +71,6 @@ from .model.node_glem import GLEM
 from .model.edge_gnn import GSgnnEdgeModel
 from .model.lp_gnn import GSgnnLinkPredictionModel
 from .model.loss_func import (ClassifyLossFunc,
-                              MaskedClassifyLossFunc,
                               RegressionLossFunc,
                               ShrinkageLossFunc,
                               LinkPredictBCELossFunc,
@@ -660,7 +658,7 @@ def create_builtin_node_model(g, config, train_task):
     if config.training_method["name"] == "glem":
         model = GLEM(config.alpha_l2norm, config.target_ntype, **config.training_method["kwargs"])
     elif config.training_method["name"] == "default":
-        model = GSgnnNodeModel(config.alpha_l2norm, use_model_residuals=getattr(config, "use_model_residuals", False))
+        model = GSgnnNodeModel(config.alpha_l2norm)
     set_encoder(model, g, config, train_task)
 
     encoder_out_dims = model.gnn_encoder.out_dims \
