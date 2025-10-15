@@ -18,7 +18,9 @@
 
 import os
 import logging
+import json
 import importlib.metadata
+from argparse import Namespace
 
 import numpy as np
 import dgl
@@ -43,21 +45,23 @@ from .config import (BUILTIN_INPUT_ONLY_ENCODER,
                      BUILTIN_LP_DISTMULT_DECODER,
                      BUILTIN_LP_ROTATE_DECODER,
                      BUILTIN_LP_TRANSE_L1_DECODER,
-                     BUILTIN_LP_TRANSE_L2_DECODER)
-from .config import (BUILTIN_LP_LOSS_CROSS_ENTROPY,
+                     BUILTIN_LP_TRANSE_L2_DECODER,
+                     BUILTIN_LP_LOSS_CROSS_ENTROPY,
                      BUILTIN_LP_LOSS_CONTRASTIVELOSS,
                      BUILTIN_LP_LOSS_BPR,
                      BUILTIN_CLASS_LOSS_CROSS_ENTROPY,
                      BUILTIN_CLASS_LOSS_FOCAL,
                      BUILTIN_REGRESSION_LOSS_MSE,
-                     BUILTIN_REGRESSION_LOSS_SHRINKAGE)
+                     BUILTIN_REGRESSION_LOSS_SHRINKAGE,
+                     GSConfig)
+from .eval.eval_func import (
+    SUPPORTED_HIT_AT_METRICS,
+    SUPPORTED_LINK_PREDICTION_METRICS)
 from .config import (FeatureGroup,
                      FeatureGroupSize)
-from .eval.eval_func import (SUPPORTED_HIT_AT_METRICS,
-                             SUPPORTED_LINK_PREDICTION_METRICS)
 from .model.embed import (GSPureLearnableInputLayer,
                           GSNodeEncoderInputLayer,
-                          GSEdgeEncoderInputLayer, ResonateNodeEncoderInputLayer)
+                          GSEdgeEncoderInputLayer)
 from .model.lm_embed import GSLMNodeEncoderInputLayer, GSPureLMNodeInputLayer
 from .model.rgcn_encoder import RelationalGCNEncoder, RelGraphConvLayer
 from .model.rgat_encoder import RelationalGATEncoder
@@ -124,7 +128,8 @@ from .dataloading import (FastGSgnnLinkPredictionDataLoader,
 from .dataloading import (GSgnnLinkPredictionTestDataLoader,
                           GSgnnLinkPredictionJointTestDataLoader,
                           GSgnnLinkPredictionPredefinedTestDataLoader)
-
+from .dataloading import (GSDglDistGraphFromMetadata,
+                          load_metadata_from_json)
 from .eval import (GSgnnClassificationEvaluator,
                    GSgnnRegressionEvaluator,
                    GSgnnRconstructFeatRegScoreEvaluator,
@@ -530,26 +535,6 @@ def create_builtin_node_decoder(g, decoder_input_dim, config, train_task):
                     "to 2 or greater."
                 )
                 loss_func = ClassifyLossFunc(config.multilabel,
-                                             config.multilabel_weights,
-                                             config.imbalance_class_weights)
-            elif config.class_loss_func == BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED:
-                assert config.num_classes > 1, (
-                    f"When using {BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED} loss "
-                    "function, please make sure the num_classes is set "
-                    "to 2 or greater."
-                )
-
-                assert hasattr(config, '_label_mask'), (
-                    f"When using {BUILTIN_CLASS_LOSS_CROSS_ENTROPY_MASKED} loss "
-                    "function, please make sure the label_mask is set "
-                    "to define true/false like "
-                    "label_mask:"
-                    "  -'true:1'"
-                    "  -'false:-1'"
-                )
-
-                loss_func = MaskedClassifyLossFunc(config._label_mask,
-                                             config.multilabel,
                                              config.multilabel_weights,
                                              config.imbalance_class_weights)
             elif config.class_loss_func == BUILTIN_CLASS_LOSS_FOCAL:
@@ -1134,29 +1119,14 @@ def set_encoder(model, g, config, train_task):
                 config.hidden_size,
                 use_wholegraph_sparse_emb=config.use_wholegraph_embed)
         else:
-            if config.use_resonate_node_encoder:
-                node_encoder = ResonateNodeEncoderInputLayer(g,
-                    node_feat_size, config.hidden_size,
-                    dropout=config.dropout,
-                    force_no_embeddings=config.construct_feat_ntype,
-                    use_node_encoder_residuals=config.use_node_encoder_residuals,
-                    encoder_type=config.resonate_encoder,
-                    config=config
-                    )
-            else:
-                node_encoder = GSNodeEncoderInputLayer(g,
-                    node_feat_size, config.hidden_size,
-                    dropout=config.dropout,
-                    activation=config.input_activate,
-                    use_node_embeddings=config.use_node_embeddings,
-                    force_no_embeddings=config.construct_feat_ntype,
-                    num_ffn_layers_in_input=config.num_ffn_layers_in_input,
-                    use_wholegraph_sparse_emb=config.use_wholegraph_embed,
-                    use_node_encoder_residuals=config.use_node_encoder_residuals,
-                    use_node_encoder_wide_layer=config.use_node_encoder_wide_layer,
-                    ffn_activation=config.ffn_activation
-                    )
-
+            node_encoder = GSNodeEncoderInputLayer(g,
+                node_feat_size, config.hidden_size,
+                dropout=config.dropout,
+                activation=config.input_activate,
+                use_node_embeddings=config.use_node_embeddings,
+                force_no_embeddings=config.construct_feat_ntype,
+                num_ffn_layers_in_input=config.num_ffn_layers_in_input,
+                use_wholegraph_sparse_emb=config.use_wholegraph_embed)
         # set edge encoder input layer no matter if having edge feature names or not
         # TODO: add support of languange models and GLEM
         edge_feat_size = get_edge_feat_size(g, config.edge_feat_name)
@@ -1192,8 +1162,7 @@ def set_encoder(model, g, config, train_task):
                                            dropout=dropout,
                                            use_self_loop=config.use_self_loop,
                                            num_ffn_layers_in_gnn=config.num_ffn_layers_in_gnn,
-                                           norm=config.gnn_norm,
-                                           use_encoder_residuals=getattr(config, 'use_encoder_residuals', False))
+                                           norm=config.gnn_norm)
     elif model_encoder_type == "rgat":
         # we need to set the num_layers -1 because there is an output layer that is hard coded.
         gnn_encoder = RelationalGATEncoder(g,
@@ -1206,8 +1175,7 @@ def set_encoder(model, g, config, train_task):
                                            dropout=dropout,
                                            use_self_loop=config.use_self_loop,
                                            num_ffn_layers_in_gnn=config.num_ffn_layers_in_gnn,
-                                           norm=config.gnn_norm,
-                                           use_encoder_residuals=getattr(config, 'use_encoder_residuals', False))
+                                           norm=config.gnn_norm)
     elif model_encoder_type == "hgt":
         # we need to set the num_layers -1 because there is an output layer that is hard coded.
         gnn_encoder = HGTEncoder(g,
@@ -1510,3 +1478,76 @@ def create_lp_evaluator(config):
                                 early_stop_burnin_rounds=config.early_stop_burnin_rounds,
                                 early_stop_rounds=config.early_stop_rounds,
                                 early_stop_strategy=config.early_stop_strategy)
+
+
+####################### Functions for real-time inference #############################
+
+def restore_builtin_model_from_artifacts(model_dir, json_file, yaml_file):
+    """ Restores a trained GraphStorm model from model artifacts
+
+    This method provides a lightweight method to restore a built-in model by using the three model
+    artifacts. Under the input model path (model_dir) there needs to be a PyTorch `model.bin` file
+    with the trained model weights, a JSON file that is the GConstruct configuration specification
+    with data-derived transformations, and a YAML file that is the Graphstorm train configuration
+    updated with runtime arguments.
+    
+    This method uses the `GSMetaData` and `GSDglDistGraphFromMetadata` to create a lightweight
+    graph that only contains graph structure, and then use it to restore a built-in GraphStorm
+    model, and return both the model and the graph construction and model configuration objects.
+
+    Parameters
+    ----------
+    model_dir: str
+        The path where the trained model file exists.
+    json_file: str
+        The name of the graph construction configuration JSON file with data-derived
+        transformations. This file is expected to be in the path of model_dir.
+    yaml_file: str
+        The name of the train configuration YAML file updated with runtime arguments. This file
+        is expected to be in the path of model_dir.
+
+    Returns
+    -------
+    model: GSGnnModel
+        The restored GraphStorm model.
+    graph_metadata_json: dict
+        A graph configuration JSON object loaded from the given json_file under the model_dir
+        path.
+    gs_config: GSConfig
+        A model configuration, GSConfig, object created based on the yaml_file under the
+        model_dir path.
+    """
+    # intialize gsf environment first
+    initialize()
+
+    # create a metadata graph for a graph configuration JSON file
+    with open(os.path.join(model_dir, json_file), 'r', encoding='utf-8') as f:
+        graph_metadata_json = json.load(f)
+
+    metadata = load_metadata_from_json(graph_metadata_json)
+    metadata_g = GSDglDistGraphFromMetadata(metadata)
+
+    # load model configuration from a YAML file
+    args = Namespace(yaml_config_file=os.path.join(model_dir, yaml_file), local_rank=0)
+    gs_config = GSConfig(args)
+
+    # use GraphStorm built-in function to create the model and reload
+    if gs_config.task_type in [BUILTIN_TASK_NODE_CLASSIFICATION, BUILTIN_TASK_NODE_REGRESSION]:
+        model = create_builtin_node_gnn_model(metadata_g, gs_config, train_task=False)
+    elif gs_config.task_type in [BUILTIN_TASK_EDGE_CLASSIFICATION, BUILTIN_TASK_EDGE_REGRESSION]:
+        model = create_builtin_edge_gnn_model(metadata_g, gs_config, train_task=False)
+    elif gs_config.task_type in [BUILTIN_TASK_LINK_PREDICTION]:
+        model = create_builtin_lp_gnn_model(metadata_g, gs_config, train_task=False)
+    # TODO(Jian) add support of feature reconstruction tasks
+    else:
+        raise NotImplementedError('Only support to restore GraphStorm built-in models from '
+                                  f'artifacts on {BUILTIN_TASK_NODE_CLASSIFICATION}, '
+                                  f'{BUILTIN_TASK_NODE_REGRESSION}, '
+                                  f'{BUILTIN_TASK_EDGE_CLASSIFICATION}, '
+                                  f'{BUILTIN_TASK_EDGE_REGRESSION}, or '
+                                  f'{BUILTIN_TASK_LINK_PREDICTION}, but got {gs_config.task_type}')
+
+    model.restore_model(model_dir)
+
+    # return all three artifacts back to model_fn()
+    return model, graph_metadata_json, gs_config
