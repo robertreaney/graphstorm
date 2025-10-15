@@ -17,7 +17,6 @@
 """
 import logging
 import warnings
-from pathlib import Path
 
 import torch as th
 from torch import nn

@@ -399,15 +399,13 @@ class RelationalGCNEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
                  use_self_loop=True,
                  last_layer_act=False,
                  num_ffn_layers_in_gnn=0,
-                 norm=None,
-                 use_encoder_residuals=False):
+                 norm=None):
         super(RelationalGCNEncoder, self).__init__(h_dim, out_dim, num_hidden_layers,
                                                    edge_feat_name, edge_feat_mp_op)
         if num_bases < 0 or num_bases > len(g.canonical_etypes):
             self.num_bases = len(g.canonical_etypes)
         else:
             self.num_bases = num_bases
-        self.use_encoder_residuals = use_encoder_residuals
 
         # check edge type string format
         if edge_feat_name:
@@ -469,9 +467,6 @@ class RelationalGCNEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
         h: dict of Tensor
             New node embeddings for each node type in the format of {ntype: tensor}.
         """
-        if self.use_encoder_residuals:
-            x = {k: v.clone() for k,v in n_h.items()}
-
         if e_hs is not None:
             assert len(e_hs) == len(blocks), 'The layer of edge features should be equal to ' + \
                 f'the number of blocks, but got {len(e_hs)} layers of edge features ' + \
@@ -482,10 +477,6 @@ class RelationalGCNEncoder(GraphConvEncoder, GSgnnGNNEncoderInterface):
         else:
             for layer, block in zip(self.layers, blocks):
                 n_h = layer(block, n_h)
-
-        if self.use_encoder_residuals:
-            for node_type in n_h:
-                n_h[node_type] = n_h[node_type] + x[node_type]
 
         return n_h
 
