@@ -1,4 +1,6 @@
 # temp files
+*.so
+*.o
 *~
 *#
 *.swp

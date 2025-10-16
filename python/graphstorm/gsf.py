@@ -128,8 +128,6 @@ from .dataloading import (FastGSgnnLinkPredictionDataLoader,
 from .dataloading import (GSgnnLinkPredictionTestDataLoader,
                           GSgnnLinkPredictionJointTestDataLoader,
                           GSgnnLinkPredictionPredefinedTestDataLoader)
-from .dataloading import (GSDglDistGraphFromMetadata,
-                          load_metadata_from_json)
 from .eval import (GSgnnClassificationEvaluator,
                    GSgnnRegressionEvaluator,
                    GSgnnRconstructFeatRegScoreEvaluator,
