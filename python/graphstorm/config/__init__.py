@@ -40,11 +40,12 @@ from .config import (BUILTIN_INPUT_ONLY_ENCODER,
 from .config import SUPPORTED_LP_DECODER
 
 from .config import (GRAPHSTORM_MODEL_EMBED_LAYER,
+                     GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                     GRAPHSTORM_MODEL_EDGE_EMBED_LAYER,
                      GRAPHSTORM_MODEL_GNN_LAYER,
                      GRAPHSTORM_MODEL_DECODER_LAYER,
                      GRAPHSTORM_MODEL_ALL_LAYERS,
                      GRAPHSTORM_MODEL_LAYER_OPTIONS,
-                     GRAPHSTORM_MODEL_DENSE_EMBED_LAYER,
                      GRAPHSTORM_MODEL_SPARSE_EMBED_LAYER)
 from .config import (BUILTIN_GNN_NORM,
                      BUILDIN_GNN_LAYER_NORM,
@@ -63,6 +64,10 @@ from .config import (GRAPHSTORM_LP_EMB_L2_NORMALIZATION,
                      GRAPHSTORM_LP_EMB_NORMALIZATION_METHODS)
 from .config import (GRAPHSTORM_SAGEMAKER_TASK_TRACKER,
                      GRAPHSTORM_TENSORBOARD_TASK_TRACKER)
+from .config import (
+    GS_RUNTIME_TRAINING_CONFIG_FILENAME,
+    GS_RUNTIME_GCONSTRUCT_FILENAME,
+    )
 
 from .config import TaskInfo
 from .config import (FeatureGroup,

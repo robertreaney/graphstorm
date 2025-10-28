@@ -40,6 +40,221 @@ SIZE_DICT = {
         'largest': 1e+10
     }
 
+def convert_tensor_to_list_arrays(tensor):
+    """ Convert Pytorch Tensor to a list of arrays
+
+    Parameters:
+    tensor: Pytorch Tensor
+        The input Pytorch tensor (1D or 2D) to be converted
+    
+    Returns:
+    list_array: list of numpy arrays
+        A list of numpy arrays
+    """
+    
+    np_array = tensor.numpy()
+    list_array = [np_array[i] for i in range(len(np_array))]
+
+    return list_array
+
+def create_dummy_hetero_graph_config(tmp_dir, graph, save_data=False):
+    """ Build the new JSON file from a gcontruct for tests
+    """
+    # generate node dataframe: we use the graph node ids and node name as node_type
+    node_list = []
+
+    # extract the first letter of each node type name as the prefix
+    node_prefix_dict = {}
+    for ntype in graph.ntypes:
+        node_prefix_dict[ntype] = ntype[0]
+
+    for ntype in graph.ntypes:
+        node_dict = {}
+        # generate the id column
+        node_ids = graph.nodes(ntype)
+        # pad a prefix before each node id
+        str_node_ids = np.array([f'{node_prefix_dict[ntype]}{i}' for i in node_ids.numpy()])
+        
+        node_dict['node_id'] = str_node_ids
+
+        # generate the feature columns and label column
+        if graph.nodes[ntype].data:
+            feat_dims = {}
+            for feat_name, val in graph.nodes[ntype].data.items():
+                # Here we just hard code the 'label' string
+                if feat_name == 'label':
+                   # convert tensor to list of arrays for saving in parquet format
+                    node_dict[feat_name] = convert_tensor_to_list_arrays(val)
+                    continue
+                # Here we assume all others are node features
+                # convert tensor to list of arrays for saving in parquet format
+                node_dict[feat_name] = convert_tensor_to_list_arrays(val)
+                dims = list(val.shape)[1:]
+                feat_dims[feat_name] = dims
+
+        # generate the pandas DataFrame that combine ids, and, if have, features and labels
+        node_df = pd.DataFrame(node_dict)
+        # add node type name and node dataframe as a tuple
+        node_list.append((ntype, node_df, feat_dims))
+
+    # genreate edge dataframe
+    edge_list = []
+    
+    for src_ntype, etype, dst_ntype in graph.canonical_etypes:
+        edge_dict = {}
+        # generate the ids columns for both source nodes and destination nodes
+        src_ids, dst_ids = graph.edges(etype=(src_ntype, etype, dst_ntype))
+        # pad a prefix before each node id
+        str_src_ids = np.array([f'{node_prefix_dict[src_ntype]}{i}' for i in src_ids.numpy()])
+        str_dst_ids = np.array([f'{node_prefix_dict[dst_ntype]}{i}' for i in dst_ids.numpy()])
+        edge_dict['source_id'] = str_src_ids
+        edge_dict['dest_id'] = str_dst_ids
+        
+        # generate feature columns and label col
+        if graph.edges[(src_ntype, etype, dst_ntype)].data:
+            feat_dims = {}
+            for feat_name, val in graph.edges[(src_ntype, etype, dst_ntype)].data.items():
+                if feat_name == 'label':
+                    # Here we just hard code the 'label' string
+                    # convert tensor to list of arrays for saving in parquet format
+                    edge_dict['label'] = convert_tensor_to_list_arrays(val)
+                    continue
+                # Here we assume all others are edge features
+                # convert tensor to list of arrays for saving in parquet format
+                edge_dict[feat_name] = convert_tensor_to_list_arrays(val)
+                dims = list(val.shape)[1:]
+                feat_dims[feat_name] = dims
+
+        # generate the pandas DataFrame that combine ids, and, if have, features and labels
+        edge_df = pd.DataFrame(edge_dict)
+        # add canonical edge type name and edge dataframe as a tuple
+        edge_list.append(((src_ntype, etype, dst_ntype), edge_df, feat_dims))
+    
+    # output raw data files
+    node_base_path = os.path.join(tmp_dir, 'nodes')
+    # save node data files
+    node_file_paths = {}
+    for (ntype, node_df, _) in node_list:
+        node_file_path = os.path.join(node_base_path, ntype + '.parquet')
+        if save_data:
+            node_df.to_parquet(node_file_path)
+        node_file_paths[ntype]= [node_file_path]
+
+    edge_base_path = os.path.join(tmp_dir, 'edges')
+    # save edge data files
+    edge_file_paths = {}
+    for (canonical_etype, edge_df, _) in edge_list:
+        src_ntype, etype, dst_ntype = canonical_etype
+        edge_file_name = src_ntype + '_' + etype + '_' + dst_ntype
+        edge_file_path = os.path.join(edge_base_path, edge_file_name + '.parquet')
+        if save_data:
+            edge_df.to_parquet(edge_file_path)
+        edge_file_paths[canonical_etype] = [edge_file_path]
+
+    # generate node json object
+    node_jsons = []
+    for (ntype, node_df, feat_dims) in node_list:
+        node_dict = {}
+        node_dict['node_type'] = ntype
+        node_dict['format'] = {'name': 'parquet'}       # In this example, we just use parquet
+        node_dict['files'] = node_file_paths[ntype]
+
+        labels_list = []
+        feats_list = []
+        # check all dataframe columns
+        for col in node_df.columns:
+            label_dict = {}
+            feat_dict = {}
+            if col == 'node_id':
+                node_dict['node_id_col'] = col
+            elif col == 'label':
+                label_dict['label_col'] = col
+                label_dict['task_type'] = 'classification'
+                label_dict['split_pct'] = [0.8, 0.1, 0.1]
+                label_dict['label_stats_type'] = 'frequency_cnt'
+                labels_list.append(label_dict)
+            elif col == 'text':
+                feat_dict['feature_col'] = col
+                feat_dict['feature_name'] = col
+                feat_dict['transform'] = {"name": "tokenize_hf",
+                                          "bert_model": "bert-base-uncased",
+                                          "max_seq_length": 16}
+                feats_list.append(feat_dict)
+            else:
+                feat_dict['feature_col'] = col
+                feat_dict['feature_name'] = col
+                feat_dict['feature_dim'] = feat_dims[col]
+                # for this example, we do not have transform for features
+                feats_list.append(feat_dict)
+        # set up the rest fileds of this node type
+        if feats_list:
+            node_dict['features'] = feats_list
+        if labels_list:
+            node_dict['labels'] = labels_list
+        
+        node_jsons.append(node_dict)
+
+    # generate edge json object
+    edge_jsons = []
+    for (canonical_etype, edge_df, feat_dims) in edge_list:
+        edge_dict = {}
+        edge_dict['relation'] = canonical_etype
+        edge_dict['format'] = {'name': 'parquet'}       # In this example, we just use parquet
+        edge_dict['files'] = edge_file_paths[canonical_etype]
+
+        labels_list = []
+        feats_list = []
+        src_ntype, etype, dst_ntype = canonical_etype
+        # check all dataframe columns
+        for col in edge_df.columns:
+            label_dict = {}
+            feat_dict = {}
+            if col == 'source_id':
+                edge_dict['source_id_col'] = col
+            elif col == 'dest_id':
+                edge_dict['dest_id_col'] = col
+            elif col == 'label':
+                label_dict['task_type'] = 'link_prediction'
+                label_dict['split_pct'] = [0.8, 0.1, 0.1]
+                labels_list.append(label_dict)
+            elif col.startswith('cate_'):
+                feat_dict['feature_col'] = col
+                feat_dict['feature_name'] = col
+                feat_dict['transform'] = {"name": "to_categorical"}
+                feat_dict['feature_dim'] = feat_dims[col]
+                feats_list.append(feat_dict)
+            else:
+                feat_dict['feature_col'] = col
+                feat_dict['feature_name'] = col
+                feat_dict['feature_dim'] = feat_dims[col]
+                feats_list.append(feat_dict)
+        # set up the rest fileds of this node type
+        if feats_list:
+            edge_dict['features'] = feats_list
+        if labels_list:
+            edge_dict['labels'] = labels_list
+        
+        edge_jsons.append(edge_dict)
+
+    # generate the configuration JSON file
+    data_json = {}
+    data_json['version'] = 'gconstruct-runtime-v0.1'
+    if len(node_list) == 1 and len(edge_list) == 1:
+        data_json['is_homogeneous'] = True
+    else:
+        data_json['is_homogeneous'] = False
+    data_json["add_reverse_edges"] = False
+    data_json['nodes'] = node_jsons
+    data_json['edges'] = edge_jsons
+        
+    # output configration JSON
+    json_file_path = os.path.join(tmp_dir, 'config.json')
+
+    with open(json_file_path, 'w', encoding='utf-8') as f:
+        json.dump(data_json, f, indent=4)
+
+    return json_file_path
+
 def generate_mask(idx, length):
     mask = np.zeros(length)
     mask[idx] = 1
@@ -539,6 +754,92 @@ def generate_dummy_homogeneous_failure_graph(size='tiny', gen_mask=True, type='n
     return hetero_graph
 
 
+def generate_dummy_hetero_graph_hete_rev_edge(size='tiny', gen_mask=True):
+    """
+    Generate a dummy heterogeneous graph with reverse edges. GraphStorm output graph will
+    save the reverse edge type as <orig-edge-type>-rev.
+    """
+    size_dict = SIZE_DICT
+    data_size = int(size_dict[size])
+
+    num_nodes_dict = {
+        "n0": data_size,
+        "n1": data_size,
+    }
+
+    edges = {
+        ("n0", "r0", "n1"): (th.randint(data_size, (data_size,)),
+                             th.randint(data_size, (data_size,))),
+        ("n0", "r1", "n1"): (th.randint(data_size, (2 * data_size,)),
+                             th.randint(data_size, (2 * data_size,))),
+    }
+    edges[("n1", "r0-rev", "n0")] = (edges[("n0", "r0", "n1")][1], edges[("n0", "r0", "n1")][0])
+    edges[("n1", "r1-rev", "n0")] = (edges[("n0", "r1", "n1")][1], edges[("n0", "r1", "n1")][0])
+
+    hetero_graph = dgl.heterograph(edges, num_nodes_dict=num_nodes_dict)
+
+    # set node and edge features
+    node_feat = {'n0': th.randn(data_size, 2),
+                 'n1': th.randn(data_size, 2)}
+    node_feat1 = {'n0': th.randn(data_size, 4),
+                 'n1': th.randn(data_size, 4)}
+
+    edge_feat = {'r0': th.randn(data_size, 2),
+                 'r1': th.randn(2 * data_size, 2)}
+    edge_feat['r0-rev'] = edge_feat['r0']
+    edge_feat['r1-rev'] = edge_feat['r1']
+
+    hetero_graph.nodes['n0'].data['feat'] = node_feat['n0']
+    hetero_graph.nodes['n1'].data['feat'] = node_feat['n1']
+    hetero_graph.nodes['n0'].data['feat1'] = node_feat1['n0']
+    hetero_graph.nodes['n1'].data['feat1'] = node_feat1['n1']
+    hetero_graph.nodes['n1'].data['label'] = th.randint(10, (hetero_graph.number_of_nodes('n1'), ))
+
+    hetero_graph.edges['r0'].data['feat'] = edge_feat['r0']
+    hetero_graph.edges['r1'].data['feat'] = edge_feat['r1']
+    hetero_graph.edges['r0-rev'].data['feat'] = edge_feat['r0']
+    hetero_graph.edges['r1-rev'].data['feat'] = edge_feat['r1']
+    hetero_graph.edges['r1'].data['label'] = th.randint(10, (hetero_graph.number_of_edges('r1'), ))
+
+    # set train/val/test masks for nodes and edges
+    if gen_mask:
+        target_ntype = ['n1']
+        target_etype = [("n0", "r1", "n1"), ("n0", "r0", "n1")]
+
+        node_train_mask = generate_mask([0,1], data_size)
+        node_val_mask = generate_mask([2,3], data_size)
+        node_test_mask = generate_mask([4,5], data_size)
+        node_val_mask2 = generate_mask([2], data_size)
+        node_test_mask2 = generate_mask([4], data_size)
+
+        edge_train_mask = generate_mask([0,1], 2 * data_size)
+        edge_val_mask = generate_mask([2,3], 2 * data_size)
+        edge_test_mask = generate_mask([4,5], 2 * data_size)
+        edge_val_mask_2 = generate_mask([2], 2 * data_size)
+        edge_test_mask_2 = generate_mask([4], 2 * data_size)
+
+        edge_train_mask2 = generate_mask([i for i in range(data_size//2)], data_size)
+        edge_val_mask2 = generate_mask([2,3], data_size)
+        edge_test_mask2 = generate_mask([4,5], data_size)
+
+        hetero_graph.nodes[target_ntype[0]].data['train_mask'] = node_train_mask
+        hetero_graph.nodes[target_ntype[0]].data['val_mask'] = node_val_mask
+        hetero_graph.nodes[target_ntype[0]].data['test_mask'] = node_test_mask
+        hetero_graph.nodes[target_ntype[0]].data['val_mask2'] = node_val_mask2
+        hetero_graph.nodes[target_ntype[0]].data['test_mask2'] = node_test_mask2
+
+        hetero_graph.edges[target_etype[0]].data['train_mask'] = edge_train_mask
+        hetero_graph.edges[target_etype[0]].data['val_mask'] = edge_val_mask
+        hetero_graph.edges[target_etype[0]].data['test_mask'] = edge_test_mask
+        hetero_graph.edges[target_etype[0]].data['val_mask2'] = edge_val_mask_2
+        hetero_graph.edges[target_etype[0]].data['test_mask2'] = edge_test_mask_2
+
+        hetero_graph.edges[target_etype[1]].data['train_mask'] = edge_train_mask2
+        hetero_graph.edges[target_etype[1]].data['val_mask'] = edge_val_mask2
+        hetero_graph.edges[target_etype[1]].data['test_mask'] = edge_test_mask2
+
+    return hetero_graph
+
 def partion_and_load_distributed_graph(hetero_graph, dirname, graph_name='dummy'):
     """
     Partition a heterogeneous graph into a temporal directory, and reload it as a distributed graph
@@ -586,7 +887,8 @@ def generate_special_dummy_dist_graph_for_efeat_gnn(dirname, graph_name='special
 
 def generate_dummy_dist_graph(dirname, size='tiny', graph_name='dummy',
                               gen_mask=True, is_homo=False, add_reverse=False,
-                              is_random=True, add_reverse_efeat=False):
+                              is_random=True, add_reverse_efeat=False,
+                              return_graph_config=False):
     """
     Generate a dummy DGL distributed graph with the given size
     Parameters
@@ -606,8 +908,16 @@ def generate_dummy_dist_graph(dirname, size='tiny', graph_name='dummy',
                                                    add_reverse_efeat=add_reverse_efeat)
     else:
         hetero_graph = generate_dummy_homo_graph(size=size, gen_mask=gen_mask)
-    return partion_and_load_distributed_graph(hetero_graph=hetero_graph, dirname=dirname,
-                                              graph_name=graph_name)
+    
+    dist_g, part_config = partion_and_load_distributed_graph(hetero_graph=hetero_graph,
+                                                             dirname=dirname,
+                                                             graph_name=graph_name)
+
+    if return_graph_config:
+        graph_config_new = create_dummy_hetero_graph_config(dirname, hetero_graph)
+        return dist_g, part_config, graph_config_new
+    else:
+        return dist_g, part_config
 
 def generate_dummy_dist_graph_reconstruct(dirname, size='tiny',
                                           graph_name='dummy', gen_mask=True):
@@ -687,6 +997,33 @@ def generate_dummy_dist_graph_homogeneous_failure_graph(dirname, size='tiny', gr
     hetero_graph = generate_dummy_homogeneous_failure_graph(size=size, gen_mask=gen_mask, type=type)
     return partion_and_load_distributed_graph(hetero_graph=hetero_graph, dirname=dirname,
                                               graph_name=graph_name)
+
+
+def generate_dummy_dist_graph_hete_rev_edge(dirname, size='tiny', graph_name='dummy',
+                                            return_graph_config=True):
+    """
+    Generate a dummy heterogeneous graph for restoring model artifacts.
+    Parameters
+    ----------
+    dirname : str
+        the directory where the graph will be partitioned and stored.
+    size: str
+        the size of dummy graph data, could be one of tiny, small, medium, large, and largest
+    graph_name: string
+        graph name
+    return_graph_config: bool
+        if return graph construction config
+    """
+    hetero_graph = generate_dummy_hetero_graph_hete_rev_edge(size=size)
+    dist_g, part_config = partion_and_load_distributed_graph(hetero_graph=hetero_graph, dirname=dirname,
+                                              graph_name=graph_name)
+
+    if return_graph_config:
+        graph_config_new = create_dummy_hetero_graph_config(dirname, hetero_graph)
+        return dist_g, part_config, graph_config_new
+    else:
+        return dist_g, part_config
+
 
 def load_lm_graph(part_config):
     with open(part_config) as f:

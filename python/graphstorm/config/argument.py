@@ -16,57 +16,57 @@
     Arguments and config
 """
 
-import os
-import sys
 import argparse
-import math
 import logging
+import math
+import os
+import shutil
+import sys
+import tempfile
 import warnings
+from typing import Any, Dict
 
 import yaml
 import torch as th
 import torch.nn.functional as F
 from dgl.distributed.constants import DEFAULT_NTYPE, DEFAULT_ETYPE
 
-from .config import BUILTIN_GNN_ENCODER
-from .config import BUILTIN_ENCODER
-from .config import SUPPORTED_BACKEND
-from .config import BUILTIN_EDGE_FEAT_MP_OPS
-from .config import (BUILTIN_LP_LOSS_FUNCTION,
-                     BUILTIN_LP_LOSS_CROSS_ENTROPY,
-                     BUILTIN_LP_LOSS_CONTRASTIVELOSS,
-                     BUILTIN_CLASS_LOSS_CROSS_ENTROPY,
-                     BUILTIN_CLASS_LOSS_FUNCTION,
-                     BUILTIN_CLASS_LOSS_FOCAL,
-                     BUILTIN_REGRESSION_LOSS_MSE,
-                     BUILTIN_REGRESSION_LOSS_FUNCTION)
-
-from .config import BUILTIN_TASK_NODE_CLASSIFICATION
-from .config import BUILTIN_TASK_NODE_REGRESSION
-from .config import BUILTIN_TASK_EDGE_CLASSIFICATION
-from .config import BUILTIN_TASK_EDGE_REGRESSION
-from .config import (BUILTIN_TASK_LINK_PREDICTION,
-                     LINK_PREDICTION_MAJOR_EVAL_ETYPE_ALL)
-from .config import (BUILTIN_TASK_RECONSTRUCT_NODE_FEAT,
-                     BUILTIN_TASK_RECONSTRUCT_EDGE_FEAT)
-from .config import BUILTIN_GNN_NORM
-from .config import EARLY_STOP_CONSECUTIVE_INCREASE_STRATEGY
-from .config import EARLY_STOP_AVERAGE_INCREASE_STRATEGY
-from .config import GRAPHSTORM_SAGEMAKER_TASK_TRACKER
-from .config import SUPPORTED_TASK_TRACKER
-
-from .config import SUPPORTED_TASKS
-
-from .config import BUILTIN_LP_DISTMULT_DECODER
-from .config import SUPPORTED_LP_DECODER
-from .config import (GRAPHSTORM_LP_EMB_NORMALIZATION_METHODS,
-                     GRAPHSTORM_LP_EMB_L2_NORMALIZATION)
-
-from .config import (GRAPHSTORM_MODEL_ALL_LAYERS, GRAPHSTORM_MODEL_EMBED_LAYER,
-                     GRAPHSTORM_MODEL_DECODER_LAYER, GRAPHSTORM_MODEL_LAYER_OPTIONS)
-from .config import get_mttask_id
-from .config import (TaskInfo,
-                     FeatureGroup)
+from .config import (
+    # Encoders
+    BUILTIN_ENCODER, BUILTIN_GNN_ENCODER,
+    # Backends
+    SUPPORTED_BACKEND,
+    # Edge feature operations
+    BUILTIN_EDGE_FEAT_MP_OPS,
+    # Loss functions
+    BUILTIN_CLASS_LOSS_CROSS_ENTROPY, BUILTIN_CLASS_LOSS_FUNCTION,
+    BUILTIN_LP_LOSS_CONTRASTIVELOSS, BUILTIN_LP_LOSS_CROSS_ENTROPY, BUILTIN_LP_LOSS_FUNCTION,
+    BUILTIN_REGRESSION_LOSS_FUNCTION, BUILTIN_REGRESSION_LOSS_MSE, BUILTIN_CLASS_LOSS_FOCAL,
+    # Tasks
+    BUILTIN_TASK_EDGE_CLASSIFICATION, BUILTIN_TASK_EDGE_REGRESSION,
+    BUILTIN_TASK_LINK_PREDICTION, BUILTIN_TASK_NODE_CLASSIFICATION,
+    BUILTIN_TASK_NODE_REGRESSION, BUILTIN_TASK_RECONSTRUCT_EDGE_FEAT,
+    BUILTIN_TASK_RECONSTRUCT_NODE_FEAT, LINK_PREDICTION_MAJOR_EVAL_ETYPE_ALL,
+    SUPPORTED_TASKS,
+    # Filenames
+    GS_RUNTIME_TRAINING_CONFIG_FILENAME,
+    GS_RUNTIME_GCONSTRUCT_FILENAME,
+    # GNN normalization
+    BUILTIN_GNN_NORM,
+    # Early stopping strategies
+    EARLY_STOP_AVERAGE_INCREASE_STRATEGY, EARLY_STOP_CONSECUTIVE_INCREASE_STRATEGY,
+    # Task tracking
+    GRAPHSTORM_SAGEMAKER_TASK_TRACKER, SUPPORTED_TASK_TRACKER,
+    # Link prediction
+    BUILTIN_LP_DISTMULT_DECODER, GRAPHSTORM_LP_EMB_L2_NORMALIZATION,
+    GRAPHSTORM_LP_EMB_NORMALIZATION_METHODS, SUPPORTED_LP_DECODER,
+    # Model layers
+    GRAPHSTORM_MODEL_ALL_LAYERS, GRAPHSTORM_MODEL_DECODER_LAYER,
+    GRAPHSTORM_MODEL_NODE_EMBED_LAYER, GRAPHSTORM_MODEL_EDGE_EMBED_LAYER,
+    GRAPHSTORM_MODEL_LAYER_OPTIONS,
+    # Utility functions and classes
+    TaskInfo, get_mttask_id, FeatureGroup
+)
 
 from ..utils import TORCH_MAJOR_VER, get_log_level, get_graph_name, get_rank
 
@@ -183,7 +183,7 @@ class GSConfig:
         """ Construct a GSConfig object.
 
         Parameters:
-        ------------
+        -----------
         cmd_args: Arguments
             Commend line arguments.
         """
@@ -228,6 +228,96 @@ class GSConfig:
             self._parse_multi_tasks(multi_task_config)
         else:
             self._multi_tasks = None
+
+        # If model output is configured, save the runtime train config as a yaml file there,
+        # and the graph construction config, if one exists in the input
+        if hasattr(self, "_save_model_path") and self._save_model_path:
+            # First check if path is writable
+            if self._is_path_writable(self._save_model_path):
+                # If we get here, path is writable, create directory
+                os.makedirs(self._save_model_path, exist_ok=True)
+
+                # Save a copy of train config with runtime args
+                train_config_output_path = os.path.join(
+                    self._save_model_path, GS_RUNTIME_TRAINING_CONFIG_FILENAME)
+                self._save_runtime_train_config(train_config_output_path)
+
+                # Copy over graph construction config, if one exists
+                gconstruct_config_output_path = os.path.join(
+                    self._save_model_path, GS_RUNTIME_GCONSTRUCT_FILENAME)
+                self._copy_graph_construct_config(gconstruct_config_output_path)
+            else:
+                warnings.warn(
+                    f"Model output path {self._save_model_path} is not writable. "
+                    "You will need to manually copy over the training config and "
+                    "graph construction config for model deployment.")
+
+    @staticmethod
+    def _is_path_writable(path: str) -> bool:
+        """Check if a path is writable.
+
+        Parameters
+        ----------
+        path: str
+            Path to check
+
+        Returns
+        -------
+        True if writable, False otherwise
+        """
+
+        if os.path.exists(path):
+            # Path exists, check if we can write to it
+            try:
+                testfile = tempfile.TemporaryFile(dir=path)
+                testfile.close()
+            except (OSError, PermissionError):
+                return False
+        else:
+            # Path doesn't exist, check if we can create it
+            try:
+                os.makedirs(path)
+                os.rmdir(path)  # Clean up
+            except (OSError, PermissionError):
+                return False
+        return True
+
+
+    def _copy_graph_construct_config(self, output_data_config):
+        """ Copy graph construct config to the model output path.
+        """
+        # Copy data configuration file if available
+        if get_rank() == 0:
+            try:
+                # Referring to missing self.part_config can raise an AssertionError,
+                # so we need to surround in try/except
+                part_config_dir = os.path.dirname(self.part_config)
+                input_data_config = os.path.join(part_config_dir, GS_RUNTIME_GCONSTRUCT_FILENAME)
+                if os.path.exists(input_data_config):
+                    try:
+                        shutil.copy2(
+                            input_data_config,
+                            output_data_config
+                        )
+                        logging.info("Copied graph construction config to %s", output_data_config)
+                    except (OSError, PermissionError) as e:
+                        warnings.warn(
+                            f"Failed to copy {GS_RUNTIME_GCONSTRUCT_FILENAME} to model output: "
+                            f"{str(e)}. You will need to manually copy over the graph "
+                            "construction config for model deployment.")
+                else:
+                    warnings.warn(
+                        f"Graph construction config {GS_RUNTIME_GCONSTRUCT_FILENAME} "
+                        f"not found in {part_config_dir}. "
+                        "This is expected for graph data processed with version < 0.5. "
+                        "You will need to manually copy over the graph construction "
+                        "config for model deployment.")
+            except Exception as e: # pylint: disable=broad-exception-caught
+                warnings.warn(
+                    f"Failed to access {GS_RUNTIME_GCONSTRUCT_FILENAME}: {str(e)}. "
+                    "You will need to manually copy over the graph construction "
+                    "config for model deployment.")
+
 
     def set_attributes(self, configuration):
         """Set class attributes from 2nd level arguments in yaml config"""
@@ -311,6 +401,43 @@ class GSConfig:
         """
         for key, val in configuration.items():
             setattr(self, f"_{key}", val)
+
+    def _save_runtime_train_config(self, output_path: str):
+        """Save a YAML file that combines the input YAML with runtime args.
+
+        Parameters:
+        -----------
+        output_path : str
+            Path where to save the config.
+        """
+        # Get the original YAML content
+        yaml_config = self.load_yaml_config(self.yaml_paths)
+
+        # Update with runtime args (all attributes starting with '_')
+        for attr_name, attr_value in vars(self).items():
+            if attr_name.startswith('_') and not attr_name.startswith('__'):
+                # Extract the key without the underscore
+                key = attr_name[1:]
+
+                # Find the appropriate section to update
+                if 'gsf' in yaml_config:
+                    for section in yaml_config['gsf'].values():
+                        if isinstance(section, dict) and key in section:
+                            section[key] = attr_value
+                            break
+                    else:
+                        # If not found in any section, add to the `runtime` section
+                        if 'runtime' not in yaml_config['gsf']:
+                            yaml_config['gsf']['runtime'] = {}
+                        yaml_config['gsf']['runtime'].update({key: attr_value})
+                else:
+                    raise ValueError("GraphStorm configuration needs a 'gsf' section")
+
+        # Save the combined config
+        with open(output_path, 'w', encoding="utf-8") as f:
+            yaml.dump(yaml_config, f, default_flow_style=False)
+            logging.info("Saved combined configuration to %s", output_path)
+
 
     def _parse_general_task_config(self, task_config):
         """ Parse the genral task info
@@ -635,7 +762,7 @@ class GSConfig:
         logging.debug("Multi-task learning with %d tasks", len(tasks))
         self._multi_tasks = tasks
 
-    def load_yaml_config(self, yaml_path):
+    def load_yaml_config(self, yaml_path) -> Dict[str, Any]:
         """Helper function to load a yaml config file"""
         with open(yaml_path, "r", encoding='utf-8') as stream:
             try:
@@ -1716,8 +1843,8 @@ class GSConfig:
     @property
     def restore_model_layers(self):
         """ GraphStorm model layers to load. Currently, three neural network layers are supported,
-            i.e., ``embed`` (input layer), ``gnn`` and ``decoder``. Default is to restore all three
-            of these layers.
+            i.e., ``node_embed``, ``edge_embed``, ``gnn`` and ``decoder``. Default is to restore
+            all four of these layers.
         """
         # pylint: disable=no-member
         model_layers = GRAPHSTORM_MODEL_ALL_LAYERS
@@ -1737,11 +1864,16 @@ class GSConfig:
             if model_layers == GRAPHSTORM_MODEL_ALL_LAYERS:
                 logging.warning("Restoring GLEM's LM from checkpoint only support %s and %s.'\
                                 'Setting to: '%s'",
-                                [GRAPHSTORM_MODEL_EMBED_LAYER],
-                                [GRAPHSTORM_MODEL_EMBED_LAYER, GRAPHSTORM_MODEL_DECODER_LAYER],
-                                GRAPHSTORM_MODEL_EMBED_LAYER
+                                [GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                                 GRAPHSTORM_MODEL_EDGE_EMBED_LAYER],
+                                [GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                                 GRAPHSTORM_MODEL_EDGE_EMBED_LAYER,
+                                 GRAPHSTORM_MODEL_DECODER_LAYER],
+                                [GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                                 GRAPHSTORM_MODEL_EDGE_EMBED_LAYER]
                                 )
-                model_layers = [GRAPHSTORM_MODEL_EMBED_LAYER]
+                model_layers = [GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                                GRAPHSTORM_MODEL_EDGE_EMBED_LAYER]
         return model_layers
 
     @property
@@ -3825,5 +3957,3 @@ def _add_distill_args(parser):
     group.add_argument("--max-distill-step", type=int, default=argparse.SUPPRESS,
                        help="The maximum of training step for each node type for distillation")
     return parser
-
-# Users can add their own udf parser

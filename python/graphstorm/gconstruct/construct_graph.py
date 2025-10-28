@@ -31,6 +31,7 @@ import torch as th
 import dgl
 from dgl.distributed.constants import DEFAULT_NTYPE, DEFAULT_ETYPE
 
+from ..config import GS_RUNTIME_GCONSTRUCT_FILENAME
 from ..utils import sys_tracker, get_log_level, check_graph_name
 from .file_io import parse_node_file_format, parse_edge_file_format
 from .file_io import get_in_files
@@ -44,6 +45,7 @@ from .transform import (print_node_label_stats,
                         save_edge_label_stats)
 from .id_map import NoopMap, IdMap, map_node_ids
 from .utils import (multiprocessing_data_read,
+                    update_feat_transformation_conf,
                     update_two_phase_feat_ops, ExtMemArrayMerger,
                     partition_graph,
                     ExtMemArrayWrapper,
@@ -51,6 +53,7 @@ from .utils import (multiprocessing_data_read,
 from .utils import (get_hard_edge_negs_feats,
                     shuffle_hard_nids)
 from .config_conversion import GSProcessingConfigConverter
+
 
 
 def prepare_node_data(in_file, feat_ops, read_file):
@@ -103,16 +106,19 @@ def parse_node_data(in_file, feat_ops, label_ops, node_id_col, read_file, ext_me
 
     Returns
     -------
-    tuple : node ID array and a dict of node feature tensors.
+    tuple : node ID array, a dict of node feature tensors and a dict of feature dimensions.
     """
     data = read_file(in_file)
-    feat_data = process_features(data, feat_ops, ext_mem) if feat_ops is not None else {}
+    if feat_ops is not None:
+        feat_data, feat_dim_dict = process_features(data, feat_ops, ext_mem)
+    else:
+        feat_data, feat_dim_dict = {}, {}
     if label_ops is not None:
         label_data = process_labels(data, label_ops)
         for key, val in label_data.items():
             feat_data[key] = val
     node_ids = data[node_id_col] if node_id_col in data else None
-    return (node_ids, feat_data)
+    return (node_ids, feat_data, feat_dim_dict)
 
 def prepare_edge_data(in_file, feat_ops, read_file):
     """ Prepare edge data information for data transformation.
@@ -220,7 +226,8 @@ def parse_edge_data(in_file, feat_ops, label_ops, node_id_map, read_file,
 
     Returns
     -------
-    a tuple : source ID vector, destination ID vector, a dict of edge feature tensors.
+    a tuple : source ID vector, destination ID vector, a dict of edge feature tensors,
+            and a dict of feature dimension.
     """
     src_id_col = conf['source_id_col'] if 'source_id_col' in conf else None
     dst_id_col = conf['dest_id_col'] if 'dest_id_col' in conf else None
@@ -234,7 +241,10 @@ def parse_edge_data(in_file, feat_ops, label_ops, node_id_map, read_file,
         # the in_file is empty
         return None
 
-    feat_data = process_features(data, feat_ops, ext_mem) if feat_ops is not None else {}
+    if feat_ops is not None:
+        feat_data, feat_dim_dict = process_features(data, feat_ops, ext_mem)
+    else:
+        feat_data, feat_dim_dict = {}, {}
     if label_ops is not None:
         label_data = process_labels(data, label_ops)
         for key, val in label_data.items():
@@ -258,7 +268,7 @@ def parse_edge_data(in_file, feat_ops, label_ops, node_id_map, read_file,
                     f"Expecting the edge feature {key} has the same length" \
                     f"as num existing edges {len(src_ids)}, but get {len(feat)}"
 
-    return (src_ids, dst_ids, feat_data)
+    return (src_ids, dst_ids, feat_data, feat_dim_dict)
 
 def _process_data(user_pre_parser, user_parser,
                   two_phase_feat_ops,
@@ -596,7 +606,10 @@ def process_node_data(process_confs, arr_merger, remap_id,
                                     ext_mem_workspace_type)
         type_node_id_map = [None] * len(return_dict)
         type_node_data = {}
-        for i, (node_ids, data) in return_dict.items():
+        for i, (node_ids, data, feat_dim_dict) in return_dict.items():
+            if process_conf and ("features" in process_conf):
+                # Write feature dim to the updated gconstruct config json
+                update_feat_transformation_conf(process_conf["features"], feat_dim_dict)
             for feat_name in data:
                 if feat_name not in type_node_data:
                     type_node_data[feat_name] = [None] * len(return_dict)
@@ -689,13 +702,15 @@ def process_node_data(process_confs, arr_merger, remap_id,
     sys_tracker.check('Finish processing node data')
     return (node_id_map, node_data, label_stats, label_masks)
 
-def _collect_parsed_edge_data(data_dict):
+def _collect_parsed_edge_data(data_dict, process_conf=None):
     """ Collect edge data parsed by parse_edge_data
 
     Parameters
     ----------
     data_dict: dict
         The edge data
+    process_conf: dict
+        The processed edge configuration
     """
     # Order the return data first
     return_data = [None] * len(data_dict)
@@ -712,7 +727,9 @@ def _collect_parsed_edge_data(data_dict):
     for ret_data in return_data:
         if ret_data is None:
             continue
-        src_ids, dst_ids, part_data = ret_data
+        src_ids, dst_ids, part_data, feat_dim_dict = ret_data
+        if process_conf and ("features" in process_conf):
+            update_feat_transformation_conf(process_conf["features"], feat_dim_dict)
         type_src_ids.append(src_ids)
         type_dst_ids.append(dst_ids)
         for feat_name in part_data:
@@ -838,7 +855,7 @@ def process_edge_data(process_confs, node_id_map, arr_merger,
                                     ext_mem_workspace_type)
 
         type_src_ids, type_dst_ids, type_edge_data = \
-            _collect_parsed_edge_data(return_dict)
+            _collect_parsed_edge_data(return_dict, process_conf)
 
         edge_type = tuple(edge_type)
         if edge_type not in label_stats:
@@ -955,6 +972,10 @@ def verify_confs(confs):
             node['node_type'] = DEFAULT_NTYPE
         for edge in confs['edges']:
             edge['relation'] = list(DEFAULT_ETYPE)
+        confs["is_homogeneous"] = True
+    else:
+        confs["is_homogeneous"] = False
+
 
 def print_graph_info(g, node_data, edge_data, node_label_stats, edge_label_stats,
                      node_label_masks, edge_label_masks):
@@ -1029,6 +1050,39 @@ def print_graph_info(g, node_data, edge_data, node_label_stats, edge_label_stats
         for label_name, stats in edge_label_stats[etype].items():
             print_edge_label_stats(etype, label_name, stats)
 
+
+def write_transformed_config(output_dir, process_confs, output_conf_file=None):
+    """
+    Write the transformed configuration file. If not specified by output_conf_file,
+    will write to the output graph directory.
+
+    Parameters:
+    ---------
+    output_dir: str
+        Path to the constructed graph
+    process_confs: dict
+        GConstruct Transformed Config
+    output_conf_file: str
+        Path to the output configuration file, default: None
+    """
+    if output_conf_file is not None:
+        outfile_path = output_conf_file
+    else:
+        new_file_name = GS_RUNTIME_GCONSTRUCT_FILENAME
+        outfile_path = os.path.join(output_dir, new_file_name)
+
+    # check if the output configuration file exists. Overwrite it with a warning.
+    if os.path.exists(outfile_path):
+        logging.warning('Overwrote the existing %s file, which was generated in ' + \
+                        'the previous graph construction command. Use the --output-conf-file ' + \
+                        'argument to specify a different location if not want to overwrite the ' + \
+                        'existing configuration file.', outfile_path)
+
+    # Save the new config file.
+    with open(outfile_path, "w", encoding="utf8") as outfile:
+        json.dump(process_confs, outfile, indent=4)
+
+
 def process_graph(args):
     """ Process the graph.
     """
@@ -1054,6 +1108,8 @@ def process_graph(args):
     else:
         logging.warning("Unrecognized configuration file version name: %s",
                         process_confs["version"])
+    # Update version to runtime
+    process_confs["version"] = "gconstruct-runtime-v0.1"
 
     sys_tracker.set_rank(0)
     num_processes_for_nodes = args.num_processes_for_nodes \
@@ -1095,23 +1151,6 @@ def process_graph(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.output_conf_file is not None:
-        outfile_path = args.output_conf_file
-    else:
-        new_file_name = 'data_transform_new.json'
-        outfile_path = os.path.join(args.output_dir,new_file_name )
-
-    # check if the output configuration file exists. Overwrite it with a warning.
-    if os.path.exists(outfile_path):
-        logging.warning('Overwrote the existing %s file, which was generated in ' + \
-                        'the previous graph construction command. Use the --output-conf-file ' + \
-                        'argument to specify a different location if not want to overwrite the ' + \
-                        'existing configuration file.', outfile_path)
-
-    # Save the new config file.
-    with open(outfile_path, "w", encoding="utf8") as outfile:
-        json.dump(process_confs, outfile, indent=4)
-
     if args.add_reverse_edges:
         edges1 = {}
         if is_homogeneous(process_confs):
@@ -1149,6 +1188,9 @@ def process_graph(args):
                 edges1[etype[2], etype[1] + "-rev", etype[0]] = (e[1], e[0])
         edges = edges1
         sys_tracker.check('Add reverse edges')
+    process_confs["add_reverse_edges"] = args.add_reverse_edges
+
+    write_transformed_config(args.output_dir, process_confs, args.output_conf_file)
     g = dgl.heterograph(edges, num_nodes_dict=num_nodes)
     print_graph_info(g, node_data, edge_data, node_label_stats, edge_label_stats,
                      node_label_masks, edge_label_masks)

@@ -55,11 +55,13 @@ import json
 import logging
 import os
 import re
+import importlib
 from pathlib import Path
 import tempfile
 import time
 from collections.abc import Mapping
 from typing import Any, Dict, Optional
+from packaging import version
 
 import boto3
 import botocore
@@ -69,7 +71,6 @@ from graphstorm_processing.graph_loaders.dist_heterogeneous_loader import (
     HeterogeneousLoaderConfig,
     ProcessedGraphRepresentation,
 )
-from graphstorm_processing.config.config_parser import create_config_objects
 from graphstorm_processing.config.config_conversion import GConstructConfigConverter
 from graphstorm_processing.constants import TRANSFORMATIONS_FILENAME
 from graphstorm_processing.data_transformations import spark_utils, s3_utils
@@ -79,7 +80,17 @@ from graphstorm_processing.repartition_files import (
     ParquetRepartitioner,
 )
 from graphstorm_processing.graph_loaders.row_count_utils import verify_metadata_match
-from graphstorm_processing.constants import ExecutionEnv, FilesystemType
+from graphstorm_processing.constants import ExecutionEnv, FilesystemType, HOMOGENEOUS_FLAG
+
+# Avoid entry script version issue
+try:
+    from graphstorm_processing.config.config_parser import (
+        create_config_objects,
+        update_gsprocessing_config,
+    )
+except ImportError:
+    update_gsprocessing_config = None
+    from graphstorm_processing.config.config_parser import create_config_objects
 
 
 @dataclasses.dataclass
@@ -110,6 +121,8 @@ class ExecutorConfig:
         The name of the graph being processed. If not provided we use part of the input_prefix.
     do_repartition: bool
         Whether to apply repartitioning to the graph on the Spark leader.
+    num_s3_threads: int
+        Number of threads for S3 interactions.
     """
 
     local_config_path: str
@@ -123,6 +136,7 @@ class ExecutorConfig:
     add_reverse_edges: bool
     graph_name: Optional[str]
     do_repartition: bool
+    num_s3_threads: int = 16
 
 
 @dataclasses.dataclass
@@ -137,6 +151,7 @@ class GSProcessingArguments:
     log_level: str
     graph_name: Optional[str]
     do_repartition: bool
+    num_s3_threads: int
 
 
 class DistributedExecutor:
@@ -162,6 +177,7 @@ class DistributedExecutor:
         self.filesystem_type = executor_config.filesystem_type
         self.execution_env = executor_config.execution_env
         self.add_reverse_edges = executor_config.add_reverse_edges
+        self.num_s3_threads = executor_config.num_s3_threads
         # We use the data location as the graph name if a name is not provided
         if executor_config.graph_name:
             self.graph_name = executor_config.graph_name
@@ -251,19 +267,33 @@ class DistributedExecutor:
         self.spark = spark_utils.create_spark_session(self.execution_env, self.filesystem_type)
 
         # Initialize the graph loader
+        if update_gsprocessing_config:
+            update_gsprocessing_config(self.gsp_config_dict, self.add_reverse_edges)
+        else:
+            logging.warning(
+                "The installed GSProcessing version is outdated. "
+                "Please upgrade image/installation to version > 0.5 for the latest features."
+            )
         data_configs = create_config_objects(self.gsp_config_dict)
-        loader_config = HeterogeneousLoaderConfig(
-            add_reverse_edges=self.add_reverse_edges,
-            data_configs=data_configs,
-            enable_assertions=False,
-            graph_name=self.graph_name,
-            input_prefix=self.input_prefix,
-            local_input_path=self.local_config_path,
-            local_metadata_output_path=self.local_metadata_output_path,
-            num_output_files=self.num_output_files,
-            output_prefix=self.output_prefix,
-            precomputed_transformations=self.precomputed_transformations,
-        )
+        loader_kwargs = {
+            "is_homogeneous": self.gsp_config_dict[HOMOGENEOUS_FLAG],
+            "add_reverse_edges": self.add_reverse_edges,
+            "data_configs": data_configs,
+            "enable_assertions": False,
+            "graph_name": self.graph_name,
+            "input_prefix": self.input_prefix,
+            "local_input_path": self.local_config_path,
+            "local_metadata_output_path": self.local_metadata_output_path,
+            "num_output_files": self.num_output_files,
+            "output_prefix": self.output_prefix,
+            "precomputed_transformations": self.precomputed_transformations,
+        }
+
+        gsp_version = importlib.metadata.version("graphstorm_processing")
+        if version.parse(gsp_version) >= version.parse("0.5.1"):
+            loader_kwargs["num_s3_threads"] = self.num_s3_threads
+
+        loader_config = HeterogeneousLoaderConfig(**loader_kwargs)
 
         self.loader = DistHeterogeneousGraphLoader(
             self.spark,
@@ -395,12 +425,70 @@ class DistributedExecutor:
             )
             json.dump(sorted_timers, f, indent=4)
 
+        # Update saved feature dim in input config
+        self._merge_config_with_feat_dim(self.gsp_config_dict, graph_meta_dict)
+
+        # If pre-computed representations exist, merge them with the input dict and save to disk
+        with open(
+            os.path.join(
+                self.local_metadata_output_path,
+                f"{os.path.splitext(self.config_filename)[0]}_with_transformations.json",
+            ),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            input_dict_with_transforms = self._merge_config_with_transformations(
+                self.gsp_config_dict, processed_representations.transformation_representations
+            )
+            json.dump(input_dict_with_transforms, f, indent=4)
+
         # This is used to upload the output output JSON files to S3 on non-SageMaker runs,
         # since we can't rely on SageMaker to do it
         if self.filesystem_type == FilesystemType.S3:
             self._upload_output_files(
                 self.loader, force=(not self.execution_env == ExecutionEnv.SAGEMAKER)
             )
+
+    def _merge_config_with_feat_dim(self, gsp_config_dict: dict, graph_meta_dict: dict):
+        """Merge the config dict with the feature dimension dict.
+
+        Parameters
+        ----------
+        gsp_config_dict : dict
+            The input configuration dictionary, using GSProcessing schema
+        graph_meta_dict: dict
+            The output graph metadata dictionary
+        """
+        nfeat_size = graph_meta_dict["graph_info"]["nfeat_size"]
+        efeat_size = graph_meta_dict["graph_info"]["efeat_size"]
+        # Nodes may not be defined in the node config
+        if "nodes" in gsp_config_dict:
+            for gsp_node_config in gsp_config_dict["nodes"]:
+                node_type = gsp_node_config["type"]
+                if "features" in gsp_node_config:
+                    for gsp_node_feat in gsp_node_config["features"]:
+                        feat_name = (
+                            gsp_node_feat["name"]
+                            if "name" in gsp_node_feat
+                            else gsp_node_feat["column"]
+                        )
+                        # Align with gconstruct to allow dim a list for 3-D features
+                        gsp_node_feat["dim"] = [nfeat_size[node_type][feat_name]]
+
+        for gsp_edge_config in gsp_config_dict["edges"]:
+            src_type = gsp_edge_config["source"]["type"]
+            dst_type = gsp_edge_config["dest"]["type"]
+            relation = gsp_edge_config["relation"]["type"]
+            edge_type = f"{src_type}:{relation}:{dst_type}"
+            if "features" in gsp_edge_config:
+                for gsp_edge_feat in gsp_edge_config["features"]:
+                    feat_name = (
+                        gsp_edge_feat["name"]
+                        if "name" in gsp_edge_feat
+                        else gsp_edge_feat["column"]
+                    )
+                    # Align with gconstruct to allow dim a list for 3-D features
+                    gsp_edge_feat["dim"] = [efeat_size[edge_type][feat_name]]
 
     def _merge_config_with_transformations(
         self,
@@ -503,7 +591,7 @@ class DistributedExecutor:
 
         gsp_top_level_dict = {
             "graph": gsp_config_dict_copy,
-            "version": "gsprocessing-v1.0",
+            "version": "gsprocessing-runtime-v1.0",
         }
 
         return gsp_top_level_dict
@@ -577,7 +665,12 @@ def parse_args() -> argparse.Namespace:
             "data on the Spark leader if necessary."
         ),
     )
-
+    parser.add_argument(
+        "--num-s3-threads",
+        type=int,
+        default=16,
+        help=("Number of threads written to S3, " "only effective when writing to S3."),
+    )
     return parser.parse_args()
 
 
@@ -715,6 +808,7 @@ def main():
         add_reverse_edges=gsprocessing_args.add_reverse_edges,
         graph_name=gsprocessing_args.graph_name,
         do_repartition=gsprocessing_args.do_repartition,
+        num_s3_threads=gsprocessing_args.num_s3_threads,
     )
 
     dist_executor = DistributedExecutor(executor_configuration)

@@ -27,16 +27,21 @@ SUPPORTED_BACKEND = ["gloo", "nccl"]
 BUILTIN_EDGE_FEAT_MP_OPS = ["concat", "add", "sub", "mul", "div"]
 
 GRAPHSTORM_MODEL_EMBED_LAYER = "embed"
-GRAPHSTORM_MODEL_DENSE_EMBED_LAYER = "dense_embed"
+GRAPHSTORM_MODEL_NODE_EMBED_LAYER = "node_embed"
+GRAPHSTORM_MODEL_EDGE_EMBED_LAYER = "edge_embed"
+# v0.5.1: Disable GRAPHSTORM_MODEL_DENSE_EMBED_LAYER because it causes confusion and
+# code complexity but only increase readability for LM input layer save and restore.
+# GRAPHSTORM_MODEL_DENSE_EMBED_LAYER = "dense_embed"
 GRAPHSTORM_MODEL_SPARSE_EMBED_LAYER = "sparse_embed"
 GRAPHSTORM_MODEL_GNN_LAYER = "gnn"
 GRAPHSTORM_MODEL_DECODER_LAYER = "decoder"
-GRAPHSTORM_MODEL_ALL_LAYERS = [GRAPHSTORM_MODEL_EMBED_LAYER,
+# v0.5.1: revise the layer definition to support edge embed and reduce confusion
+GRAPHSTORM_MODEL_ALL_LAYERS = [GRAPHSTORM_MODEL_NODE_EMBED_LAYER,
+                               GRAPHSTORM_MODEL_EDGE_EMBED_LAYER,
                                GRAPHSTORM_MODEL_GNN_LAYER,
                                GRAPHSTORM_MODEL_DECODER_LAYER]
 GRAPHSTORM_MODEL_LAYER_OPTIONS = GRAPHSTORM_MODEL_ALL_LAYERS + \
-        [GRAPHSTORM_MODEL_DENSE_EMBED_LAYER,
-         GRAPHSTORM_MODEL_SPARSE_EMBED_LAYER]
+        [GRAPHSTORM_MODEL_SPARSE_EMBED_LAYER]
 
 BUILTIN_CLASS_LOSS_CROSS_ENTROPY = "cross_entropy"
 # i have to add this here to allow my config yaml to select this loss function
@@ -106,6 +111,14 @@ SUPPORTED_LP_DECODER = [BUILTIN_LP_DOT_DECODER,
                         BUILTIN_LP_ROTATE_DECODER,
                         BUILTIN_LP_TRANSE_L1_DECODER,
                         BUILTIN_LP_TRANSE_L2_DECODER]
+
+# Filename constants
+
+# Filename for GS training yaml, updated with runtime args
+GS_RUNTIME_TRAINING_CONFIG_FILENAME = "GRAPHSTORM_RUNTIME_UPDATED_TRAINING_CONFIG.yaml"
+
+# Filename for output GConstruct graph data configuration, updated with data-derived transformations
+GS_RUNTIME_GCONSTRUCT_FILENAME = "data_transform_new.json"
 
 ################ Task info data classes ############################
 def get_mttask_id(task_type, ntype=None, etype=None, label=None):

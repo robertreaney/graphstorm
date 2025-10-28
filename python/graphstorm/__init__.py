@@ -16,7 +16,7 @@
     Graphstorm package.
 """
 # pylint: disable=wrong-import-position
-__version__ = "0.4.2"
+__version__ = "0.5.1"
 import warnings
 
 # Don't print torchdata warnings
@@ -49,3 +49,4 @@ from .gsf import (create_builtin_node_decoder,
                   create_builtin_reconstruct_efeat_decoder)
 from .gsf import (get_builtin_lp_train_dataloader_class,
                   get_builtin_lp_eval_dataloader_class)
+from .gsf import restore_builtin_model_from_artifacts
