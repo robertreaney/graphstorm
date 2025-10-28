@@ -1569,10 +1569,14 @@ def load_model(model_path, gnn_model=None, embed_layer=None, decoder=None, edge_
     if gnn_model is not None and isinstance(gnn_model, nn.Module):
         assert GRAPHSTORM_MODEL_GNN_LAYER in checkpoint, "There is no GNN module to be loaded."
         gnn_model.load_state_dict(checkpoint[GRAPHSTORM_MODEL_GNN_LAYER])
-    if  embed_layer is not None and isinstance(embed_layer, nn.Module):
-        assert GRAPHSTORM_MODEL_NODE_EMBED_LAYER in checkpoint, ("There is no node encoder "
-                                                                 "module to be loaded.")
-        embed_layer.load_state_dict(checkpoint[GRAPHSTORM_MODEL_NODE_EMBED_LAYER], strict=False)
+    if embed_layer is not None and isinstance(embed_layer, nn.Module):
+        if GRAPHSTORM_MODEL_NODE_EMBED_LAYER in checkpoint:
+            embed_layer.load_state_dict(checkpoint[GRAPHSTORM_MODEL_NODE_EMBED_LAYER], strict=False)
+        elif 'embed' in checkpoint:
+            # TODO remove this backward compat bandaid for old models
+            embed_layer.load_state_dict(checkpoint['embed'], strict=False)
+        else:
+            raise ValueError("There is no node encoder module to be loaded.")
     if decoder is not None and isinstance(decoder, nn.Module):
         assert GRAPHSTORM_MODEL_DECODER_LAYER in checkpoint, ("There is no decoder module to "
                                                               "be loaded.")
