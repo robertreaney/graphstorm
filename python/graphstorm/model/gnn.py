@@ -511,7 +511,6 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
         self._decoder = None
         self._loss_fn = None
         self._optimizer = None
-        self._use_model_residuals = None
 
     def get_dense_params(self):
         """retrieve the all dense layers' parameters as a parameter list except for
@@ -894,14 +893,8 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
         dict of Tensors: The GNN embeddings.
         """
         device = blocks[0].device
-        additional_loss = 0
         if self.node_input_encoder is not None:
-            # right here, MoE would output a tuple of (embs, loss) instead of a tensor
             node_input_embs = self.node_input_encoder(input_nfeats, input_nodes)
-            for k, v in node_input_embs.items():
-                if isinstance(v, tuple):
-                    additional_loss += v[1]
-                    node_input_embs[k] = v[0]
             node_input_embs = {name: emb.to(device) for name, emb in node_input_embs.items()}
         else:
             node_input_embs = input_nfeats
@@ -923,26 +916,8 @@ class GSgnnModel(GSgnnModelBase):    # pylint: disable=abstract-method
                 gnn_embs = self.gnn_encoder(blocks, node_input_embs, edge_input_embs)
             else:
                 gnn_embs = self.gnn_encoder(blocks, node_input_embs)
-
-                if self._use_model_residuals:
-                    def _apply(gnn, node_emb, k):
-                        size = gnn.size(0)
-                        if size == 0:
-                            return gnn
-                        else:
-                            # here is code to create a mapping but its just the first B rows
-                            # input_ids = input_nodes[k]
-                            # output_ids = blocks[-1].dstdata[dgl.NID][k]
-                            # id_map = {item.item(): idx for idx, item in enumerate(input_ids)}
-                            # output_idx = [id_map[id.item()] for id in output_ids]
-
-                            return gnn + node_emb[:size]
-                    
-                    gnn_embs = {k: _apply(v, node_input_embs[k], k) for k, v in gnn_embs.items()}
         else:
             gnn_embs = node_input_embs
-        if additional_loss > 0:
-            return gnn_embs, additional_loss
         return gnn_embs
 
     def save_dense_model(self, model_path):

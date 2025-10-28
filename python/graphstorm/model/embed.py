@@ -36,7 +36,6 @@ from ..utils import (
     create_dist_tensor,
 )
 from .ngnn_mlp import NGNNMLP
-from .resonate import HMA, MoE
 from ..wholegraph import WholeGraphDistTensor
 from ..wholegraph import is_wholegraph_init
 from ..utils import is_wholegraph
@@ -486,33 +485,20 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                  use_node_embeddings=False,
                  force_no_embeddings=None,
                  num_ffn_layers_in_input=0,
-                 ffn_activation='relu',
+                 ffn_activation=F.relu,
                  cache_embed=False,
-                 use_wholegraph_sparse_emb=False,
-                 use_node_encoder_residuals=False,
-                 use_node_encoder_wide_layer=False):
+                 use_wholegraph_sparse_emb=False):
         super(GSNodeEncoderInputLayer, self).__init__(g)
         self.embed_size = embed_size
         self.dropout = nn.Dropout(dropout)
         self.use_node_embeddings = use_node_embeddings
         self._use_wholegraph_sparse_emb = use_wholegraph_sparse_emb
-        self.use_node_encoder_residuals = use_node_encoder_residuals
-        self.use_node_encoder_wide_layer = use_node_encoder_wide_layer
-
-        if self.use_node_encoder_residuals:
-            assert (feat_size != embed_size), 'When use_node_encoder_residuals is True, feat_size must be equal to embed_size.'
-            assert not self.use_node_embeddings, 'When use_node_encoder_residuals is True, use_node_embeddings must be False.'
-
-        if self.use_node_encoder_wide_layer:
-            assert num_ffn_layers_in_input == 1, 'When use_node_encoder_wide_layer is True, num_ffn_layers_in_input must be 1.'
-
         self.feat_size = feat_size
         if force_no_embeddings is None:
             force_no_embeddings = []
 
         self.activation = activation
         self.cache_embed = cache_embed
-        ffn_activation = getattr(F, ffn_activation)
 
         if self._use_wholegraph_sparse_emb:
             assert get_backend() == "nccl",  \
@@ -552,10 +538,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                     if get_rank() == 0:
                         logging.debug("Node %s has %d features.", ntype, feat_dim)
 
-                    if self.use_node_encoder_wide_layer:
-                        input_projs = nn.Parameter(th.Tensor(feat_dim, int(feat_dim*4)))
-                    else:
-                        input_projs = nn.Parameter(th.Tensor(feat_dim, self.embed_size))
+                    input_projs = nn.Parameter(th.Tensor(feat_dim, self.embed_size))
                     nn.init.xavier_uniform_(input_projs, gain=nn.init.calculate_gain("relu"))
                     self.input_projs[ntype] = input_projs
 
@@ -611,11 +594,7 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
         self.num_ffn_layers_in_input = num_ffn_layers_in_input
         self.ngnn_mlp = nn.ModuleDict({})
         for ntype in g.ntypes:
-            if self.use_node_encoder_wide_layer:
-                self.ngnn_mlp[ntype] = NGNNMLP(int(feat_dim*4), embed_size,
-                            num_ffn_layers_in_input, ffn_activation, dropout)
-            else:
-                self.ngnn_mlp[ntype] = NGNNMLP(embed_size, embed_size,
+            self.ngnn_mlp[ntype] = NGNNMLP(embed_size, embed_size,
                             num_ffn_layers_in_input, ffn_activation, dropout)
 
     def _init_node_embeddings(self, g, ntype, embed_size):
@@ -665,7 +644,6 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
         assert isinstance(input_feats, dict), 'The input features should be in a dict.'
         assert isinstance(input_nodes, dict), 'The input node IDs should be in a dict.'
         embs = {}
-
         for ntype in input_nodes:
             if isinstance(input_nodes[ntype], np.ndarray):
                 # WholeGraphSparseEmbedding requires the input nodes (indexing tensor)
@@ -676,7 +654,6 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
                 if ntype in self.input_projs:
                     # If the input data is not float, we need to convert it t float first.
                     emb = input_feats[ntype].float() @ self.input_projs[ntype]
-
                     if self.use_node_embeddings:
                         assert ntype in self.sparse_embeds, \
                             f"We need sparse embedding for node type {ntype}"
@@ -741,10 +718,6 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
             return h
 
         embs = {ntype: _apply(ntype, h) for ntype, h in embs.items()}
-
-        if self.use_node_encoder_residuals:
-            embs = {ntype: h + input_feats[ntype].float() for ntype, h in embs.items()}
-        
         return embs
 
     def require_cache_embed(self):
@@ -793,264 +766,6 @@ class GSNodeEncoderInputLayer(GSNodeInputLayer):
         which is given in class initialization.
         """
         return self._use_wholegraph_sparse_emb
-
-
-class ResonateNodeEncoderInputLayer(GSNodeInputLayer):
-    """The Resonate node encoder layer
-
-    Parameters
-    ----------
-    g: DistGraph
-        The input DGL distributed graph.
-    feat_size : dict of int or dict of FeatureGroupSize
-        The original feat size of each node type in the format of {str: int}.
-        If a node has multiple feature groups, it is in the format of {str: FeatureGroupSize}
-    embed_size : int
-        The output embedding size.
-    activation : callable
-        The activation function applied to the output embeddigns. Default: None.
-    dropout : float
-        The dropout parameter. Default: 0.
-    force_no_embeddings : list of str
-        The list node types that are forced to not use learnable embeddings. Default:
-        None.
-    num_ffn_layers_in_input: int
-        (Optional) Number of layers of feedforward neural network for each node type
-        in the input layer. Default: 0.
-    ffn_activation : callable
-        The activation function for the feedforward neural networks. Default: relu.
-    cache_embed : bool
-        Whether or not to cache the embeddings. Default: False.
-    use_wholegraph_sparse_emb : bool
-        Whether or not to use WholeGraph to host embeddings for sparse updates. Default:
-        False.
-
-    Examples:
-    ----------
-
-    .. code:: python
-
-        from graphstorm import get_node_feat_size
-        from graphstorm.model import GSgnnNodeModel, GSNodeEncoderInputLayer
-        from graphstorm.dataloading import GSgnnData
-
-        np_data = GSgnnData(...)
-
-        model = GSgnnNodeModel(alpha_l2norm=0)
-        feat_size = get_node_feat_size(np_data.g, "feat")
-        encoder = GSNodeEncoderInputLayer(g, feat_size,
-                                          embed_size=4,
-                                          use_node_embeddings=True)
-        model.set_node_input_encoder(encoder)
-    """
-    def __init__(self,
-                 g,
-                 feat_size,
-                 embed_size,
-                 dropout=0.0,
-                 force_no_embeddings=None,
-                 cache_embed=False,
-                 use_node_encoder_residuals=True,
-                 encoder_type='hma',
-                 config=None):
-        super(ResonateNodeEncoderInputLayer, self).__init__(g)
-        logging.warning(f"Using resonate node encoder layer! feat_size={feat_size} embed_size={embed_size} dropout={dropout} resid={use_node_encoder_residuals}")
-
-        assert encoder_type.lower() in ['hma', 'moe'], f'Resonate encoder type not supported: {encoder_type}. Choose from -> ["HMA", "MOE"]'
-        self.encoder_type = encoder_type.lower()
-
-        self.embed_size = embed_size
-        self.dropout = nn.Dropout(dropout)
-        self.use_node_encoder_residuals = use_node_encoder_residuals
-
-        if self.use_node_encoder_residuals:
-            assert all([feat_size[ntype] == embed_size for ntype in feat_size]), 'When use_node_encoder_residuals is True, feat_size must be equal to embed_size.'
-
-        # if self.use_node_encoder_wide_layer:
-        #     assert num_ffn_layers_in_input == 1, f'When use_node_encoder_wide_layer is True, num_ffn_layers_in_input must be 1, found {num_ffn_layers_in_input}'
-
-        self.feat_size = feat_size
-        if force_no_embeddings is None:
-            force_no_embeddings = []
-
-        self.cache_embed = cache_embed
-
-        if (
-            dgl.__version__ <= "1.1.2"
-            and is_distributed()
-            and get_backend() == "nccl"
-        ):
-            for ntype in g.ntypes:
-                if not feat_size[ntype]:
-                    raise NotImplementedError(
-                        "NCCL backend is not supported for utilizing "
-                        + "learnable embeddings on featureless nodes. Please use DGL version "
-                        + ">=1.1.2 or gloo backend."
-                    )
-
-        # create weight embeddings for each node for each relation
-        # self.proj_matrix = nn.ParameterDict()
-        # self.input_projs = nn.ParameterDict()
-        # self.feat_group_projs = nn.ParameterDict()
-
-        for ntype in g.ntypes:
-            if isinstance(feat_size[ntype], int):
-                feat_dim = 0
-                if feat_size[ntype] > 0:
-                    feat_dim += feat_size[ntype]
-                if feat_dim > 0:
-                    if get_rank() == 0:
-                        logging.debug("Node %s has %d features.", ntype, feat_dim)
-
-                elif ntype not in force_no_embeddings:
-                    # There is no node feature, use sparse embedding.
-                    self._sparse_embeds[ntype] = \
-                            self._init_node_embeddings(g, ntype, self.embed_size)
-                    # NOTE THAT THESE FEATURES ARE EMB_DIM SIZE
-                    # proj_matrix = nn.Parameter(th.Tensor(self.embed_size, self.embed_size))
-                    # nn.init.xavier_uniform_(proj_matrix, gain=nn.init.calculate_gain('relu'))
-                    # self.proj_matrix[ntype] = proj_matrix
-            elif isinstance(feat_size[ntype], FeatureGroupSize):
-                raise RuntimeError(f"ResonateNodeEncoderInputLayer does not support feature groups for now, found {ntype} with FeatureGroupSize.")
-            else:
-                # feat_size of ntype must be an integer or
-                # a FeatureGroupSize object.
-                raise RuntimeError(f"{ntype} is configured to have node features. But"
-                    f"encountered unknown feat_size object {type(feat_size[ntype])}."
-                    "Expecting int or FeatureGroupSize")
-
-        # resonate node encoders
-        self.encoder = nn.ModuleDict({})
-        for ntype in g.ntypes:
-            if self.encoder_type == 'hma':
-                self.encoder[ntype] = HMA(
-                    in_features=feat_size[ntype],
-                    out_features=self.embed_size,
-                    **{k.replace("_hma_", "").replace(f"{ntype}_", ""): v for k,v in config.__dict__.items() if 'hma' in k}
-                )
-            elif self.encoder_type == 'moe':
-                self.encoder[ntype] = MoE(
-                    input_size=feat_size[ntype], 
-                    output_size=self.embed_size, 
-                    **{k.replace("_moe_", "").replace(f"{ntype}_", ""): v for k,v in config.__dict__.items() if 'moe' in k}
-                )
-
-    def _init_node_embeddings(self, g, ntype, embed_size):
-        embed_name = "embed"
-
-        if get_rank() == 0:
-            logging.debug("Use additional sparse embeddings on node %s", ntype)
-        part_policy = g.get_node_partition_policy(ntype)
-        sparse_embed = DistEmbedding(
-            g.number_of_nodes(ntype),
-            embed_size,
-            embed_name + "_" + ntype,
-            init_emb,
-            part_policy,
-        )
-        return sparse_embed
-
-    def forward(self, input_feats, input_nodes):
-        """ Input layer forward computation.
-
-        Parameters
-        ----------
-        input_feats: dict of Tensor
-            The input features in the format of {ntype: feats}.
-        input_nodes: dict of Tensor
-            The input node indexes in the format of {ntype: indexes}.
-
-        Returns
-        -------
-        embs: dict of Tensor
-            The projected node embeddings in the format of {ntype: emb}.
-        """
-        assert isinstance(input_feats, dict), 'The input features should be in a dict.'
-        assert isinstance(input_nodes, dict), 'The input node IDs should be in a dict.'
-        embs = {}
-
-        for ntype in input_nodes:
-            if isinstance(input_nodes[ntype], np.ndarray):
-                # WholeGraphSparseEmbedding requires the input nodes (indexing tensor)
-                # to be a th.Tensor
-                input_nodes[ntype] = th.from_numpy(input_nodes[ntype])
-            if ntype in input_feats:
-                emb = input_feats[ntype].float()
-                
-            elif ntype in self.sparse_embeds:  # nodes do not have input features
-                # If the number of the input node of a node type is 0,
-                # return an empty tensor with shape (0, emb_size)
-                
-                device = self.encoder.device  # this might not work
-
-                if len(input_nodes[ntype]) == 0:
-                    dtype = self.sparse_embeds[ntype].weight.dtype
-                    embs[ntype] = th.zeros((0, self.sparse_embeds[ntype].embedding_dim),
-                                    device=device, dtype=dtype)
-                    continue
-                emb = self.sparse_embeds[ntype](input_nodes[ntype], device)
-
-            if emb is not None:
-                embs[ntype] = emb
-
-        def _apply(t, h):
-            chunk_size = 5000
-            B = h.shape[0]
-            if B <= chunk_size:
-                return self.encoder[t](h)
-            
-            outs = []
-            for i in range(0, h.shape[0], chunk_size):
-                outs.append(self.encoder[t](h[i:i+chunk_size]))
-            return th.cat(outs, dim=0)
-
-        embs = {ntype: _apply(ntype, h) for ntype, h in embs.items()}
-
-        if self.use_node_encoder_residuals:
-            embs = {ntype: h + input_feats[ntype].float() for ntype, h in embs.items()}
-        
-        return embs
-
-    def require_cache_embed(self):
-        """ Whether to cache the embeddings for inference.
-
-        If the input layer encoder includes heavy computations, such as BERT computations,
-        it should return ``True`` and the inference engine will cache the embeddings
-        from the input layer encoder.
-
-        Returns
-        -------
-        bool : ``True`` if we need to cache the embeddings for inference.
-        """
-        return self.cache_embed
-
-    def get_sparse_params(self):
-        """ Get the sparse parameters of this input layer.
-
-        This function is normally called by optimizers to update sparse model parameters,
-        i.e., learnable node embeddings.
-
-        Returns
-        -------
-        list of Tensors: the sparse embeddings, or empty list if no sparse parameters.
-        """
-        if self.sparse_embeds is not None and len(self.sparse_embeds) > 0:
-            return list(self.sparse_embeds.values())
-        else:
-            return []
-
-    @property
-    def in_dims(self):
-        """ Return the input feature size, which is given in class initialization.
-        """
-        return self.feat_size
-
-    @property
-    def out_dims(self):
-        """ Return the number of output dimensions, which is given in class initialization.
-        """
-        return self.embed_size
-
 
 
 class GSEdgeEncoderInputLayer(GSEdgeInputLayer):

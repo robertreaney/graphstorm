@@ -96,7 +96,7 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
     alpha_l2norm : float
         The alpha for L2 normalization.
     """
-    def __init__(self, alpha_l2norm, use_model_residuals=False):
+    def __init__(self, alpha_l2norm):
         super(GSgnnMultiTaskSharedEncoderModel, self).__init__()
         self._alpha_l2norm = alpha_l2norm
         self._task_pool = {}
@@ -104,7 +104,6 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
         self._loss_fn = nn.ModuleDict()
         self._node_embed_norm_methods = {}
         self._warn_printed = False
-        self._use_model_residuals = use_model_residuals
 
     def normalize_task_node_embs(self, task_id, embs, inplace=False):
         """ Normalize node embeddings when needed.
@@ -342,7 +341,6 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
         assert task_id in self.task_pool, \
             f"Unknown task: {task_id} in multi-task learning." \
             f"Existing tasks are {self.task_pool.keys()}"
-        additional_loss = 0
 
         # message passing graph, node features, edge features, seed nodes
         blocks, node_feats, _, input_nodes = encoder_data
@@ -398,8 +396,6 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
                         blocks, node_feats, input_nodes)
             else:
                 encode_embs = self.compute_embed_step(blocks, node_feats, input_nodes)
-                if isinstance(encode_embs, tuple):
-                    encode_embs, additional_loss = encode_embs
 
         # Call emb normalization.
         encode_embs = self.minibatch_normalize_task_node_embs(task_id, encode_embs)
@@ -419,7 +415,7 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
             ntype_logits = task_decoder(emb)
             pred_loss = loss_func(ntype_logits, ntype_labels)
 
-            return pred_loss + additional_loss
+            return pred_loss
         elif task_type in [BUILTIN_TASK_EDGE_CLASSIFICATION, BUILTIN_TASK_EDGE_REGRESSION]:
             batch_graph, target_edge_feats, labels = decoder_data
             assert len(labels) == 1, \
@@ -496,10 +492,6 @@ class GSgnnMultiTaskSharedEncoderModel(GSgnnModel, GSgnnMultiTaskModelInterface)
         task_decoder = self.decoder[task_id]
 
         if task_type in [BUILTIN_TASK_NODE_CLASSIFICATION, BUILTIN_TASK_NODE_REGRESSION]:
-            # TODO i think thisll work if we filter with task_id node. what does this look like normally?
-            if len(encode_embs) != 1:
-                # logging.warning('RESONATE filtering predict step embeddings to only target. this may cause unintended consequences.')
-                encode_embs = {k: v for k, v in encode_embs.items() if k in task_id}
             assert len(encode_embs) == 1, \
                 "In multi-task learning, only support do prediction " \
                 "on one node type for a single node task."

@@ -40,7 +40,6 @@ import json
 import logging
 from typing import Literal
 
-from graphstorm.sagemaker.utils import keep_alive
 from sagemaker.pytorch.estimator import PyTorch
 from sagemaker.tuner import (
     ParameterRange,
@@ -55,12 +54,10 @@ from sagemaker.tuner import (
 from common_parser import (
     parse_estimator_kwargs,
     parse_unknown_gs_args,
-    create_sm_session
 )
 from launch_train import get_train_parser
 
-# INSTANCE_TYPE = "ml.g4dn.12xlarge"
-INSTANCE_TYPE = "ml.g5.12xlarge"
+INSTANCE_TYPE = "ml.g4dn.12xlarge"
 
 
 def get_metric_definitions(
@@ -179,7 +176,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
 
     container_image_uri = image
 
-    prefix = f"graphstorm-hpo-{args.graph_name}-{args.task_name}"
+    prefix = f"gs-hpo-{args.graph_name}"
 
     params = {
         "eval-metric": args.metric_name,
@@ -236,13 +233,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
         tags=[
             {"Key": "GraphStorm", "Value": "oss"},
             {"Key": "GraphStorm_Task", "Value": "HPO"},
-            {"Key": "Team", "Value": "GUARDIANS"},
-            {"Key": "Process", "Value": "RREANEY-RESEARCH-SANDBOXES"},
-            {"Key": "Service", "Value": "DeepLearning"},
-            {"Key": "Environment", "Value": "Dev"},
         ],
-        keep_alive_period_in_seconds=600,
-        sagemaker_session=create_sm_session(args.instance_type, args.region),
         **estimator_kwargs,
     )
 
@@ -264,7 +255,7 @@ def run_hyperparameter_tuning_job(args, image, unknownargs):
         "max_jobs": args.max_jobs,
         "max_parallel_jobs": args.max_parallel_jobs,
         "metric_definitions": metric_definitions,
-        "strategy": args.strategy
+        "strategy": args.strategy,
     }
 
     # Add Hyperband-specific configuration if needed
@@ -338,14 +329,14 @@ def get_hpo_parser():
     hpo_group.add_argument(
         "--hb-min-epochs",
         type=int,
-        default=3,
-        help="Minimum number of epochs for Hyperband strategy. Default: 3",
+        default=1,
+        help="Minimum number of epochs for Hyperband strategy. Default: 1",
     )
     hpo_group.add_argument(
         "--hb-max-epochs",
         type=int,
-        default=25,
-        help="Maximum number of epochs for Hyperband strategy. Default: 25",
+        default=20,
+        help="Maximum number of epochs for Hyperband strategy. Default: 20",
     )
 
     return parser

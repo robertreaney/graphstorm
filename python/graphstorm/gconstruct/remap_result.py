@@ -479,7 +479,8 @@ def remap_node_pred(pred_ntypes, pred_dir,
         assert len(nid_files) == len(pred_files), \
             "Expect the number of nid files equal to " \
             "the number of prediction result files, but get " \
-            f"{len(nid_files)} and {len(pred_files)}"
+            f"{len(nid_files)} and {len(pred_files)} " \
+            f"in directory {input_pred_dir}"
 
         assert len(label_files) == len(pred_files), \
             "Expect the number of label files equal to " \
@@ -742,6 +743,11 @@ def main(args, gs_config_args):
         gs_args, _ = gs_parser.parse_known_args(gs_config_args)
         config = GSConfig(gs_args)
         config.verify_arguments(False)
+
+        # resonate. i need this here for the remap to work for baseline
+        if args.baseline:
+            config._save_prediction_path = config._save_prediction_path + "_baseline"
+
         id_mapping_path, predict_dir, node_emb_dir, task_emb_dirs, pred_ntypes, pred_etypes = \
             _parse_gs_config(config)
     else:
@@ -1177,6 +1183,7 @@ def generate_parser():
 
 if __name__ == '__main__':
     remap_parser = generate_parser()
+    remap_parser.add_argument("--baseline", action='store_true')
     remap_args, unknown_args = remap_parser.parse_known_args()
 
     main(remap_args, unknown_args)

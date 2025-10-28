@@ -886,13 +886,6 @@ class GSConfig:
             _ = self.num_bases
             _ = self.num_heads
             _ = self.num_ffn_layers_in_gnn
-            # RESONATE ATTRS
-            _ = self.use_node_encoder_residuals
-            _ = self.use_node_encoder_wide_layer
-            _ = self.ffn_activation
-            _ = self.use_model_residuals
-            _ = self.use_resonate_node_encoder
-            _ = self.resonate_encoder
 
         _ = self.return_proba
         _ = self.alpha_l2norm
@@ -905,10 +898,6 @@ class GSConfig:
         # Logging.
         _ = self.task_tracker
         _ = self.log_report_frequency
-
-        # Tune
-        _ = self.study_name
-        _ = self.study_n_trials
 
         _ = self.task_type
         # For classification/regression tasks.
@@ -2010,84 +1999,7 @@ class GSConfig:
         # By default do not use extra node embedding
         # It will make the model transductive
         return False
-
-    # RESONATE NODE ENCODER PROPERTIES
-    @property
-    def use_node_encoder_residuals(self):
-        """When using out-of-the-box NGNNMLP node encoder, use residual connections.
-        """
-        # pylint: disable=no-member
-        if hasattr(self, "_use_node_encoder_residuals"):
-            assert self._use_node_encoder_residuals in [True, False]
-            return self._use_node_encoder_residuals
-        return False
-
-    @property
-    def use_node_encoder_wide_layer(self):
-        """When using out-of-the-box NGNNMLP node encoder, this creats a wide projection inside that FFN
-        """
-        # pylint: disable=no-member
-        if hasattr(self, "_use_node_encoder_wide_layer"):
-            assert self._use_node_encoder_wide_layer in [True, False]
-            return self._use_node_encoder_wide_layer
-        return False
     
-    @property
-    def ffn_activation(self):
-        """Select activation function for node encoder NGNNMLP object
-        """
-        # pylint: disable=no-member
-        if hasattr(self, "_ffn_activation"):
-            assert self._ffn_activation in ['none', 'relu', 'gelu']
-            return self._ffn_activation
-        return "relu"
-
-    @property
-    def use_model_residuals(self):
-        """Use node encoder outputs to make residual connection before decoder"""
-        # pylint: disable=no-member
-        if hasattr(self, "_use_model_residuals"):
-            assert self._use_model_residuals in [True, False]
-            return self._use_model_residuals
-        return False
-    
-    @property
-    def use_resonate_node_encoder(self):
-        """Select the custom ResonateNodeEncoder object."""
-        # pylint: disable=no-member
-        if hasattr(self, "_use_resonate_node_encoder"):
-            assert self._use_resonate_node_encoder in [True, False]
-            return self._use_resonate_node_encoder
-        return False
-
-    @property
-    def resonate_encoder(self):
-        """Which resonate node encoder to use"""
-        # pylint: disable=no-member
-        if hasattr(self, "_resonate_encoder"):
-            assert self._resonate_encoder.lower() in ['hma', 'moe']
-            return self._resonate_encoder
-        return None
-
-    @property
-    def study_name(self):
-        """The tuning study name"""
-        # pylint: disable=no-member
-        if hasattr(self, "_study_name"):
-            return self._study_name
-        return None
-
-    @property
-    def study_n_trials(self):
-        """The number of trials for the tuning study"""
-        # pylint: disable=no-member
-        if hasattr(self, "_study_n_trials"):
-            return self._study_n_trials
-        return 3
-
-    
-    # END RESONATE ATTRS
-
     @property
     def construct_feat_ntype(self):
         """ The node types that require to reconstruct node features during node feature
