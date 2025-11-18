@@ -788,9 +788,14 @@ class GSConfig:
 
         # Auto-adjust fanout/eval_fanout when num_layers changes
         num_layers = cmd_args_dict.get("num_layers")
+        fanout = cmd_args_dict.get("fanout")
+        eval_fanout = cmd_args_dict.get("eval_fanout")
         if num_layers:
-            for fanout_attr in ["_fanout", "_eval_fanout"]:
-                if hasattr(self, fanout_attr):
+            logging.warning(f"Checking fanout and eval_fanout for num_layers={num_layers} and fanout={fanout} eval_fanout={eval_fanout}")
+            for fanout_attr, cmd_arg in zip(["_fanout", "_eval_fanout"], [fanout, eval_fanout]):
+                if cmd_arg is not None:
+                    setattr(self, fanout_attr, ','.join([str(cmd_arg)] * num_layers))
+                elif hasattr(self, fanout_attr):
                     fanout_val = getattr(self, fanout_attr)
                     # If fanout is a single integer, expand it to num_layers
                     if "," not in str(fanout_val):
@@ -800,10 +805,13 @@ class GSConfig:
                         old = fanout_val.split(",")
                         if len(old) != num_layers:
                             setattr(self, fanout_attr, ",".join([old[0]] * num_layers))
+                else:
+                    raise ValueError("how did we get here?")
 
         # Auto-adjust hidden_size to be divisible by num_heads for attention-based encoders
         hidden_size = cmd_args_dict.get("hidden_size")
         if hidden_size and hasattr(self, "_model_encoder_type"):
+            logging.warning("Checking hidden_size divisibility for attention-based encoders.")
             encoder_type = getattr(self, "_model_encoder_type", None)
             if encoder_type in ["rgat", "gat", "gatv2", "hgt"]:
                 # Get num_heads from override or use default (4)
