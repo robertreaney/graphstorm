@@ -325,7 +325,7 @@ def read_data_parquet(data_file, data_fields=None):
         data_fields = list(df_table.keys())
     for key in data_fields:
         
-        if key == "labels" and key not in df_table:
+        if ((key == "labels") | (key == "label_index")) and key not in df_table:
             # give unlabeled nodes a single -1 dummy label
             d = np.full((len(df_table), ), -1)
         else:

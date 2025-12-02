@@ -21,6 +21,8 @@ from sagemaker.processing import (ScriptProcessor,
                                   ProcessingInput,
                                   ProcessingOutput)
 
+import sys
+sys.path.insert(0, "graphstorm/sagemaker/launch")
 
 from common_parser import (
     create_sm_session,
@@ -28,7 +30,8 @@ from common_parser import (
     parse_estimator_kwargs
 )
 
-INSTANCE_TYPE = "ml.m5.12xlarge"
+from src.sagemaker.launch.tags import TAGS
+INSTANCE_TYPE = "ml.m5.24xlarge"
 
 def run_job(input_args, image, unknownargs):
     """ Run job using SageMaker ScriptProcessor
@@ -66,10 +69,10 @@ def run_job(input_args, image, unknownargs):
         instance_count=1,
         instance_type=instance_type,
         command=command,
-        base_job_name=f"gs-gconstruct-{graph_name}",
+        base_job_name=f"gnn-construct-{graph_name.replace('_', '')}",
         sagemaker_session=sess,
-        tags=[{"Key":"GraphStorm", "Value":"beta"},
-              {"Key":"GraphStorm_Task", "Value":"Processing"}],
+        volume_size_in_gb=500,
+        tags=TAGS,
         **estimator_kwargs
     )
 
