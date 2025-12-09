@@ -3643,7 +3643,7 @@ def _add_hyperparam_args(parser):
             type=lambda x: (str(x).lower() in ['true', '1']),
             default=argparse.SUPPRESS,
             help="Whether to use decoder bias")
-    group.add_argument("--gnn-norm", type=str, default=argparse.SUPPRESS, help="norm type")
+    group.add_argument("--gnn-norm", type=lambda x: None if str(x).lower() == 'none' else str(x), default=argparse.SUPPRESS, help="norm type")
     group.add_argument("--lr", type=float, default=argparse.SUPPRESS,
             help="learning rate")
     group.add_argument("-e", "--num-epochs", type=int, default=argparse.SUPPRESS,
