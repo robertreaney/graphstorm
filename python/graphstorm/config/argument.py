@@ -1427,8 +1427,11 @@ class GSConfig:
         """
         # pylint: disable=no-member
         if hasattr(self, "_max_grad_norm"):
+            # sagemaker hpo injects None string
+            if self._max_grad_norm is None:
+                return None
             max_grad_norm = float(self._max_grad_norm)
-            assert max_grad_norm > 0
+            assert max_grad_norm > 0 
             return self._max_grad_norm
         return None
 
@@ -3634,6 +3637,16 @@ def _add_task_tracker(parser):
                  "In training, every log_report_frequency, the task states are reported")
     return parser
 
+def none_or_float(value: str):
+    if str(value).lower() == "None":          # or value.lower() == "none" if you want case-insensitive
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Expected a float or 'None', got '{value}'"
+        )
+
 def _add_hyperparam_args(parser):
     group = parser.add_argument_group(title="hp")
     group.add_argument("--dropout", type=float, default=argparse.SUPPRESS,
@@ -3652,7 +3665,7 @@ def _add_hyperparam_args(parser):
             help="Mini-batch size. Must be larger than 0")
     group.add_argument("--sparse-optimizer-lr", type=float, default=argparse.SUPPRESS,
             help="sparse optimizer learning rate")
-    group.add_argument("--max-grad-norm", type=float, default=argparse.SUPPRESS,
+    group.add_argument("--max-grad-norm", type=none_or_float, default=argparse.SUPPRESS,
             help="maximum L2 norm of gradients")
     group.add_argument("--grad-norm-type", type=float, default=argparse.SUPPRESS,
             help="norm type for gradient clips")
